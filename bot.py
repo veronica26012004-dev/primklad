@@ -1,4 +1,4 @@
-import psycopg2
+import sqlite3
 import telebot
 from telebot import types
 import threading
@@ -6,10 +6,6 @@ import logging
 import os
 from dotenv import load_dotenv
 import time
-from flask import Flask, request
-
-# Настройка Flask
-app = Flask(__name__)
 
 # Настройка логирования
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -17,21 +13,19 @@ logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s 
 # Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
-DB_URL = os.getenv('DATABASE_URL')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Например, https://your-app.onrender.com/<TOKEN>
-if not TOKEN or not DB_URL or not WEBHOOK_URL:
-    logging.error("BOT_TOKEN, DATABASE_URL или WEBHOOK_URL не найдены")
-    raise ValueError("Необходимые переменные окружения не установлены")
+if not TOKEN:
+    logging.error("BOT_TOKEN не найден в переменных окружения")
+    raise ValueError("BOT_TOKEN не установлен")
 
 bot = telebot.TeleBot(TOKEN)
 
-# Блокировка для thread-safe доступа
+# Блокировка для thread-safe доступа к БД
 db_lock = threading.Lock()
 
 # Инициализация базы данных
 def init_database():
     with db_lock:
-        conn = psycopg2.connect(DB_URL)
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS inventory (
@@ -44,10 +38,17 @@ def init_database():
 
 init_database()
 
+# Состояния пользователей
+user_states = {}
+
+# Функция для нормализации текста
+def normalize_text(text):
+    return ' '.join(text.strip().split()).lower()
+
 # Функции для работы с базой данных
 def get_inventory():
     with db_lock:
-        conn = psycopg2.connect(DB_URL)
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('SELECT item, owner FROM inventory ORDER BY item')
         items = cursor.fetchall()
@@ -56,31 +57,31 @@ def get_inventory():
 
 def add_item(item_name):
     with db_lock:
-        conn = psycopg2.connect(DB_URL)
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute('INSERT INTO inventory (item, owner) VALUES (%s, %s) ON CONFLICT DO NOTHING', (item_name, None))
+        cursor.execute('INSERT OR IGNORE INTO inventory (item, owner) VALUES (?, ?)', (item_name, None))
         conn.commit()
         conn.close()
 
 def delete_item(item_name):
     with db_lock:
-        conn = psycopg2.connect(DB_URL)
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute('DELETE FROM inventory WHERE item = %s', (item_name,))
+        cursor.execute('DELETE FROM inventory WHERE item = ?', (item_name,))
         conn.commit()
         conn.close()
 
 def update_item_owner(item_name, owner):
     with db_lock:
-        conn = psycopg2.connect(DB_URL)
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute('UPDATE inventory SET owner = %s WHERE item = %s', (owner, item_name))
+        cursor.execute('UPDATE inventory SET owner = ? WHERE item = ?', (owner, item_name))
         conn.commit()
         conn.close()
 
 def find_item_in_db(item_name):
     with db_lock:
-        conn = psycopg2.connect(DB_URL)
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('SELECT item FROM inventory')
         all_items = cursor.fetchall()
@@ -287,29 +288,13 @@ def clean_old_states():
 # Запуск потока для очистки состояний
 threading.Thread(target=clean_old_states, daemon=True).start()
 
-# Webhook endpoint
-@app.route('/' + TOKEN, methods=['POST'])
-def webhook():
-    try:
-        update = telebot.types.Update.de_json(request.get_json())
-        if update:
-            bot.process_new_updates([update])
-        return 'OK', 200
-    except Exception as e:
-        logging.error(f"Ошибка в webhook: {e}")
-        return 'Error', 500
-
-# Настройка webhook при запуске
-@app.route('/')
-def setup_webhook():
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    return "Webhook установлен", 200
-
 # Запуск бота
 if __name__ == '__main__':
     print("🤖 Бот запущен...")
     logging.info("Бот запущен")
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    while True:
+        try:
+            bot.polling(none_stop=True)
+        except Exception as e:
+            logging.error(f"Ошибка в polling: {e}")
+            time.sleep(5)  # Пауза перед перезапуском
