@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask, request
 from datetime import datetime, timedelta
 import urllib.parse
+import time
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -517,6 +518,7 @@ def set_webhook():
     webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
     try:
         bot.remove_webhook()
+        time.sleep(1)  # Задержка для надежности
         success = bot.set_webhook(url=webhook_url)
         if success:
             logging.info(f"Webhook успешно установлен: {webhook_url}")
