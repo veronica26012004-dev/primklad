@@ -6,6 +6,7 @@ import logging
 import os
 from dotenv import load_dotenv
 import time
+from datetime import datetime, timedelta
 
 # Настройка логирования
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,6 +34,13 @@ def init_database():
                 owner TEXT
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_name TEXT NOT NULL,
+                event_date DATE NOT NULL
+            )
+        ''')
         conn.commit()
         conn.close()
 
@@ -45,7 +53,7 @@ user_states = {}
 def normalize_text(text):
     return ' '.join(text.strip().split()).lower()
 
-# Функции для работы с базой данных
+# Функции для работы с инвентарем
 def get_inventory():
     with db_lock:
         conn = sqlite3.connect('inventory.db', check_same_thread=False)
@@ -93,6 +101,44 @@ def find_item_in_db(item_name):
                 return db_item
         return None
 
+# Функции для работы с событиями
+def add_event(event_name, event_date):
+    with db_lock:
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO events (event_name, event_date) VALUES (?, ?)', (event_name, event_date))
+        conn.commit()
+        conn.close()
+
+def get_events(start_date=None, end_date=None):
+    with db_lock:
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
+        cursor = conn.cursor()
+        if start_date and end_date:
+            cursor.execute('SELECT id, event_name, event_date FROM events WHERE event_date BETWEEN ? AND ? ORDER BY event_date',
+                           (start_date, end_date))
+        else:
+            cursor.execute('SELECT id, event_name, event_date FROM events ORDER BY event_date')
+        events = cursor.fetchall()
+        conn.close()
+        return events
+
+def delete_event(event_id):
+    with db_lock:
+        conn = sqlite3.connect('inventory.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM events WHERE id = ?', (event_id,))
+        conn.commit()
+        conn.close()
+
+# Создаем клавиатуру стартового меню
+def create_start_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    keyboard.add(types.KeyboardButton('📦 Войти в инвентарь'))
+    return keyboard
+
+start_keyboard = create_start_keyboard()
+
 # Создаем кастомную клавиатуру главного меню с эмодзи
 def create_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -101,12 +147,27 @@ def create_main_keyboard():
         types.KeyboardButton('➖ Удалить'),
         types.KeyboardButton('🎁 Выдать'),
         types.KeyboardButton('↩️ Вернуть'),
-        types.KeyboardButton('📋 Показать инвентарь')
+        types.KeyboardButton('📋 Показать инвентарь'),
+        types.KeyboardButton('🗓️ События')
     ]
     keyboard.add(*buttons)
     return keyboard
 
 main_keyboard = create_main_keyboard()
+
+# Создаем клавиатуру меню событий
+def create_events_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    buttons = [
+        types.KeyboardButton('➕ Добавить событие'),
+        types.KeyboardButton('🗑️ Удалить событие'),
+        types.KeyboardButton('📅 Посмотреть события'),
+        types.KeyboardButton('🔙 Назад в меню')
+    ]
+    keyboard.add(*buttons)
+    return keyboard
+
+events_keyboard = create_events_keyboard()
 
 # Функция для создания inline-клавиатуры с предметами
 def create_item_keyboard(items, action):
@@ -114,6 +175,16 @@ def create_item_keyboard(items, action):
     for item in sorted(items):
         callback_data = f"{action}:{item}"
         keyboard.add(types.InlineKeyboardButton(text=item, callback_data=callback_data))
+    keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
+    return keyboard
+
+# Функция для создания inline-клавиатуры с событиями
+def create_event_keyboard(events, action):
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    for event_id, event_name, event_date in events:
+        text = f"{event_name} ({event_date})"
+        callback_data = f"{action}:{event_id}"
+        keyboard.add(types.InlineKeyboardButton(text=text, callback_data=callback_data))
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
     return keyboard
 
@@ -140,20 +211,40 @@ def show_menu(chat_id):
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=main_keyboard)
     user_states[chat_id] = 'main'
 
+# Функция для показа меню событий
+def show_events_menu(chat_id):
+    bot.send_message(chat_id, "🗓️ *Меню событий*", parse_mode='Markdown', reply_markup=events_keyboard)
+    user_states[chat_id] = 'events_main'
+
+# Функция для показа событий
+def show_events(chat_id, period='all'):
+    today = datetime.now().date()
+    if period == 'week':
+        start_date = today
+        end_date = today + timedelta(days=7)
+    elif period == 'month':
+        start_date = today
+        end_date = today + timedelta(days=30)
+    else:
+        start_date = None
+        end_date = None
+
+    events = get_events(start_date, end_date)
+    text = "🗓️ *События:*\n\n"
+    if not events:
+        text += "📭 Нет событий\n"
+    else:
+        for _, event_name, event_date in events:
+            text += f"📅 {event_name} - {event_date}\n"
+
+    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=events_keyboard)
+
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
 def start(message):
     logging.info(f"User {message.chat.id} started bot")
-    welcome_text = "👋 *Добро пожаловать в систему управления инвентарем!*\n\n"
-    welcome_text += "📋 *Доступные команды:*\n"
-    welcome_text += "➕ Добавить - добавить новый предмет\n"
-    welcome_text += "➖ Удалить - удалить предмет\n"
-    welcome_text += "🎁 Выдать - выдать предмет кому-то\n"
-    welcome_text += "↩️ Вернуть - вернуть предмет в инвентарь\n"
-    welcome_text += "📋 Показать инвентарь - обновить список"
-
-    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=main_keyboard)
-    show_menu(message.chat.id)
+    bot.send_message(message.chat.id, "👋 *Добро пожаловать!* Нажмите кнопку для входа в инвентарь.", parse_mode='Markdown', reply_markup=start_keyboard)
+    user_states[message.chat.id] = 'start'
 
 # Обработчик callback-запросов от inline-кнопок
 @bot.callback_query_handler(func=lambda call: True)
@@ -161,11 +252,11 @@ def handle_callback_query(call):
     chat_id = call.message.chat.id
     data = call.data.split(':')
     action = data[0]
-    item_name = data[1] if len(data) > 1 else None
+    item_or_id = data[1] if len(data) > 1 else None
 
     try:
         if action == 'give':
-            if item_name == 'cancel':
+            if item_or_id == 'cancel':
                 bot.delete_message(chat_id, call.message.message_id)
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
                 show_menu(chat_id)
@@ -175,40 +266,40 @@ def handle_callback_query(call):
             if isinstance(state, tuple) and state[0] == 'give_items':
                 recipient = state[1]
                 inventory = get_inventory()
-                if item_name in inventory:
-                    if inventory[item_name] is None:
-                        update_item_owner(item_name, recipient)
+                if item_or_id in inventory:
+                    if inventory[item_or_id] is None:
+                        update_item_owner(item_or_id, recipient)
                         bot.delete_message(chat_id, call.message.message_id)
-                        bot.send_message(chat_id, f"✅ *{item_name}* выдан *{recipient}*!",
+                        bot.send_message(chat_id, f"✅ *{item_or_id}* выдан *{recipient}*!",
                                        parse_mode='Markdown', reply_markup=main_keyboard)
                         show_menu(chat_id)
                     else:
                         bot.delete_message(chat_id, call.message.message_id)
-                        bot.send_message(chat_id, f"⚠️ *{item_name}* уже выдан *{inventory[item_name]}*!",
+                        bot.send_message(chat_id, f"⚠️ *{item_or_id}* уже выдан *{inventory[item_or_id]}*!",
                                        parse_mode='Markdown', reply_markup=main_keyboard)
                         show_menu(chat_id)
 
         elif action == 'delete':
-            if item_name == 'cancel':
+            if item_or_id == 'cancel':
                 bot.delete_message(chat_id, call.message.message_id)
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
                 show_menu(chat_id)
                 return
 
-            if item_name:
-                delete_item(item_name)
+            if item_or_id:
+                delete_item(item_or_id)
                 bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, f"✅ *{item_name}* удален из инвентаря!",
+                bot.send_message(chat_id, f"✅ *{item_or_id}* удален из инвентаря!",
                                parse_mode='Markdown', reply_markup=main_keyboard)
                 show_menu(chat_id)
 
         elif action == 'return':
-            if item_name == 'cancel':
+            if item_or_id == 'cancel':
                 bot.delete_message(chat_id, call.message.message_id)
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
                 show_menu(chat_id)
                 return
-            elif item_name == 'all':
+            elif item_or_id == 'all':
                 inventory = get_inventory()
                 returned_count = 0
                 for item in inventory:
@@ -219,19 +310,39 @@ def handle_callback_query(call):
                 bot.send_message(chat_id, f"✅ Возвращено всех предметов: *{returned_count}*",
                                parse_mode='Markdown', reply_markup=main_keyboard)
                 show_menu(chat_id)
-            elif item_name:
+            elif item_or_id:
                 inventory = get_inventory()
-                if item_name in inventory and inventory[item_name] is not None:
-                    update_item_owner(item_name, None)
+                if item_or_id in inventory and inventory[item_or_id] is not None:
+                    update_item_owner(item_or_id, None)
                     bot.delete_message(chat_id, call.message.message_id)
-                    bot.send_message(chat_id, f"✅ *{item_name}* возвращен в инвентарь!",
+                    bot.send_message(chat_id, f"✅ *{item_or_id}* возвращен в инвентарь!",
                                    parse_mode='Markdown', reply_markup=main_keyboard)
                     show_menu(chat_id)
                 else:
                     bot.delete_message(chat_id, call.message.message_id)
-                    bot.send_message(chat_id, f"ℹ️ *{item_name}* уже в инвентаре!",
+                    bot.send_message(chat_id, f"ℹ️ *{item_or_id}* уже в инвентаре!",
                                    parse_mode='Markdown', reply_markup=main_keyboard)
                     show_menu(chat_id)
+
+        elif action == 'delete_event':
+            if item_or_id == 'cancel':
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, "👌 Возвращаемся в меню событий", reply_markup=events_keyboard)
+                show_events_menu(chat_id)
+                return
+
+            if item_or_id:
+                delete_event(int(item_or_id))
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, f"✅ Событие удалено!",
+                               parse_mode='Markdown', reply_markup=events_keyboard)
+                show_events_menu(chat_id)
+
+        elif action == 'view_events':
+            bot.delete_message(chat_id, call.message.message_id)
+            period = item_or_id
+            show_events(chat_id, period)
+            show_events_menu(chat_id)
 
     except Exception as e:
         logging.error(f"Ошибка при обработке callback от {chat_id}: {e}")
@@ -244,10 +355,26 @@ def handle_callback_query(call):
 def handle_message(message):
     chat_id = message.chat.id
     text = message.text.strip()
-    state = user_states.get(chat_id, 'main')
+    state = user_states.get(chat_id, 'start')
 
     try:
-        if state == 'main':
+        if state == 'start':
+            if text == '📦 Войти в инвентарь':
+                user_states[chat_id] = 'main'
+                start_message = "👋 *Добро пожаловать в систему управления инвентарем!*\n\n"
+                start_message += "📋 *Доступные команды:*\n"
+                start_message += "➕ Добавить - добавить новый предмет\n"
+                start_message += "➖ Удалить - удалить предмет\n"
+                start_message += "🎁 Выдать - выдать предмет кому-то\n"
+                start_message += "↩️ Вернуть - вернуть предмет в инвентарь\n"
+                start_message += "📋 Показать инвентарь - обновить список\n"
+                start_message += "🗓️ События - управление событиями"
+                bot.send_message(chat_id, start_message, parse_mode='Markdown', reply_markup=main_keyboard)
+                show_menu(chat_id)
+            else:
+                bot.send_message(chat_id, "Пожалуйста, используйте кнопку для входа.", reply_markup=start_keyboard)
+
+        elif state == 'main':
             if text == '➕ Добавить':
                 user_states[chat_id] = 'add'
                 bot.send_message(chat_id, "📝 *Что вы хотите добавить?*\n(напишите 'стоп' для выхода)",
@@ -285,6 +412,9 @@ def handle_message(message):
             elif text == '📋 Показать инвентарь':
                 show_menu(chat_id)
 
+            elif text == '🗓️ События':
+                show_events_menu(chat_id)
+
             else:
                 show_menu(chat_id)
 
@@ -319,6 +449,65 @@ def handle_message(message):
                 else:
                     bot.send_message(chat_id, "⚠️ Нет доступных предметов для выдачи!", reply_markup=main_keyboard)
                     show_menu(chat_id)
+
+        elif state == 'events_main':
+            if text == '➕ Добавить событие':
+                user_states[chat_id] = 'add_event_name'
+                bot.send_message(chat_id, "📝 *Введите название события:* (стоп для выхода)",
+                               parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
+
+            elif text == '🗑️ Удалить событие':
+                user_states[chat_id] = 'delete_event'
+                events = get_events()
+                if events:
+                    keyboard = create_event_keyboard(events, 'delete_event')
+                    bot.send_message(chat_id, "🗑️ *Выберите событие для удаления:*",
+                                   parse_mode='Markdown', reply_markup=keyboard)
+                else:
+                    bot.send_message(chat_id, "⚠️ Нет событий!", reply_markup=events_keyboard)
+                    show_events_menu(chat_id)
+
+            elif text == '📅 Посмотреть события':
+                keyboard = types.InlineKeyboardMarkup(row_width=3)
+                keyboard.add(
+                    types.InlineKeyboardButton("На неделю", callback_data="view_events:week"),
+                    types.InlineKeyboardButton("На месяц", callback_data="view_events:month"),
+                    types.InlineKeyboardButton("Все", callback_data="view_events:all")
+                )
+                bot.send_message(chat_id, "📅 *Выберите период:*",
+                               parse_mode='Markdown', reply_markup=keyboard)
+
+            elif text == '🔙 Назад в меню':
+                bot.send_message(chat_id, "👌 Возвращаемся в главное меню", reply_markup=main_keyboard)
+                show_menu(chat_id)
+
+            else:
+                show_events_menu(chat_id)
+
+        elif state == 'add_event_name':
+            if normalize_text(text) == 'стоп':
+                bot.send_message(chat_id, "👌 Возвращаемся в меню событий", reply_markup=events_keyboard)
+                show_events_menu(chat_id)
+            elif text:
+                event_name = ' '.join(text.strip().split())
+                user_states[chat_id] = ('add_event_date', event_name)
+                bot.send_message(chat_id, f"📅 *Введите дату события* (формат: YYYY-MM-DD):",
+                               parse_mode='Markdown')
+
+        elif isinstance(state, tuple) and state[0] == 'add_event_date':
+            if normalize_text(text) == 'стоп':
+                bot.send_message(chat_id, "👌 Возвращаемся в меню событий", reply_markup=events_keyboard)
+                show_events_menu(chat_id)
+            elif text:
+                try:
+                    event_date = datetime.strptime(text, '%Y-%m-%d').date()
+                    event_name = state[1]
+                    add_event(event_name, event_date)
+                    bot.send_message(chat_id, f"✅ Событие *{event_name}* на {event_date} добавлено!",
+                                   parse_mode='Markdown', reply_markup=events_keyboard)
+                    show_events_menu(chat_id)
+                except ValueError:
+                    bot.send_message(chat_id, "⚠️ Неправильный формат даты! Попробуйте снова (YYYY-MM-DD).")
 
     except Exception as e:
         logging.error(f"Ошибка при обработке сообщения от {chat_id}: {e}")
