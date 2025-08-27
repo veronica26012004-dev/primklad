@@ -5,8 +5,9 @@ import threading
 import logging
 import os
 from dotenv import load_dotenv
-import time
+from flask import Flask, request
 from datetime import datetime, timedelta
+import urllib.parse
 
 # Настройка логирования
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,7 +19,9 @@ if not TOKEN:
     logging.error("BOT_TOKEN не найден в переменных окружения")
     raise ValueError("BOT_TOKEN не установлен")
 
+# Инициализация бота и Flask
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
 # Блокировка для thread-safe доступа к БД
 db_lock = threading.Lock()
@@ -139,7 +142,7 @@ def create_start_keyboard():
 
 start_keyboard = create_start_keyboard()
 
-# Создаем кастомную клавиатуру главного меню с эмодзи
+# Создаем кастомную клавиатуру главного меню
 def create_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
@@ -197,7 +200,6 @@ def show_menu(chat_id):
     else:
         available_count = 0
         given_count = 0
-
         for item, owner in sorted(inventory.items()):
             if owner is None:
                 text += f"✅ **{item}** - доступен\n"
@@ -205,9 +207,7 @@ def show_menu(chat_id):
             else:
                 text += f"🔸 {item} - {owner}\n"
                 given_count += 1
-
         text += f"\n📊 Статистика: {available_count} доступно, {given_count} выдано"
-
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=main_keyboard)
     user_states[chat_id] = 'main'
 
@@ -228,7 +228,6 @@ def show_events(chat_id, period='all'):
     else:
         start_date = None
         end_date = None
-
     events = get_events(start_date, end_date)
     text = "🗓️ *События:*\n\n"
     if not events:
@@ -236,122 +235,9 @@ def show_events(chat_id, period='all'):
     else:
         for _, event_name, event_date in events:
             text += f"📅 {event_name} - {event_date}\n"
-
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=events_keyboard)
 
-# Обработчик команды /start
-@bot.message_handler(commands=['start'])
-def start(message):
-    logging.info(f"User {message.chat.id} started bot")
-    bot.send_message(message.chat.id, "👋 *Добро пожаловать!* Нажмите кнопку для входа в инвентарь.", parse_mode='Markdown', reply_markup=start_keyboard)
-    user_states[message.chat.id] = 'start'
-
-# Обработчик callback-запросов от inline-кнопок
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callback_query(call):
-    chat_id = call.message.chat.id
-    data = call.data.split(':')
-    action = data[0]
-    item_or_id = data[1] if len(data) > 1 else None
-
-    try:
-        if action == 'give':
-            if item_or_id == 'cancel':
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
-                show_menu(chat_id)
-                return
-
-            state = user_states.get(chat_id, 'main')
-            if isinstance(state, tuple) and state[0] == 'give_items':
-                recipient = state[1]
-                inventory = get_inventory()
-                if item_or_id in inventory:
-                    if inventory[item_or_id] is None:
-                        update_item_owner(item_or_id, recipient)
-                        bot.delete_message(chat_id, call.message.message_id)
-                        bot.send_message(chat_id, f"✅ *{item_or_id}* выдан *{recipient}*!",
-                                       parse_mode='Markdown', reply_markup=main_keyboard)
-                        show_menu(chat_id)
-                    else:
-                        bot.delete_message(chat_id, call.message.message_id)
-                        bot.send_message(chat_id, f"⚠️ *{item_or_id}* уже выдан *{inventory[item_or_id]}*!",
-                                       parse_mode='Markdown', reply_markup=main_keyboard)
-                        show_menu(chat_id)
-
-        elif action == 'delete':
-            if item_or_id == 'cancel':
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
-                show_menu(chat_id)
-                return
-
-            if item_or_id:
-                delete_item(item_or_id)
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, f"✅ *{item_or_id}* удален из инвентаря!",
-                               parse_mode='Markdown', reply_markup=main_keyboard)
-                show_menu(chat_id)
-
-        elif action == 'return':
-            if item_or_id == 'cancel':
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
-                show_menu(chat_id)
-                return
-            elif item_or_id == 'all':
-                inventory = get_inventory()
-                returned_count = 0
-                for item in inventory:
-                    if inventory[item] is not None:
-                        update_item_owner(item, None)
-                        returned_count += 1
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, f"✅ Возвращено всех предметов: *{returned_count}*",
-                               parse_mode='Markdown', reply_markup=main_keyboard)
-                show_menu(chat_id)
-            elif item_or_id:
-                inventory = get_inventory()
-                if item_or_id in inventory and inventory[item_or_id] is not None:
-                    update_item_owner(item_or_id, None)
-                    bot.delete_message(chat_id, call.message.message_id)
-                    bot.send_message(chat_id, f"✅ *{item_or_id}* возвращен в инвентарь!",
-                                   parse_mode='Markdown', reply_markup=main_keyboard)
-                    show_menu(chat_id)
-                else:
-                    bot.delete_message(chat_id, call.message.message_id)
-                    bot.send_message(chat_id, f"ℹ️ *{item_or_id}* уже в инвентаре!",
-                                   parse_mode='Markdown', reply_markup=main_keyboard)
-                    show_menu(chat_id)
-
-        elif action == 'delete_event':
-            if item_or_id == 'cancel':
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, "👌 Возвращаемся в меню событий", reply_markup=events_keyboard)
-                show_events_menu(chat_id)
-                return
-
-            if item_or_id:
-                delete_event(int(item_or_id))
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, f"✅ Событие удалено!",
-                               parse_mode='Markdown', reply_markup=events_keyboard)
-                show_events_menu(chat_id)
-
-        elif action == 'view_events':
-            bot.delete_message(chat_id, call.message.message_id)
-            period = item_or_id
-            show_events(chat_id, period)
-            show_events_menu(chat_id)
-
-    except Exception as e:
-        logging.error(f"Ошибка при обработке callback от {chat_id}: {e}")
-        bot.delete_message(chat_id, call.message.message_id)
-        bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", reply_markup=main_keyboard)
-        show_menu(chat_id)
-
-# Основной обработчик сообщений
-@bot.message_handler(func=lambda message: True)
+# Обработчик сообщений
 def handle_message(message):
     chat_id = message.chat.id
     text = message.text.strip()
@@ -379,7 +265,6 @@ def handle_message(message):
                 user_states[chat_id] = 'add'
                 bot.send_message(chat_id, "📝 *Что вы хотите добавить?*\n(напишите 'стоп' для выхода)",
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
-
             elif text == '➖ Удалить':
                 user_states[chat_id] = 'delete'
                 inventory = get_inventory()
@@ -390,12 +275,10 @@ def handle_message(message):
                 else:
                     bot.send_message(chat_id, "⚠️ Инвентарь пуст!", reply_markup=main_keyboard)
                     show_menu(chat_id)
-
             elif text == '🎁 Выдать':
                 user_states[chat_id] = 'give_who'
                 bot.send_message(chat_id, "👤 *Кому выдать предмет?*\n(напишите имя получателя или 'стоп' для выхода)",
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
-
             elif text == '↩️ Вернуть':
                 user_states[chat_id] = 'return_items'
                 inventory = get_inventory()
@@ -408,13 +291,10 @@ def handle_message(message):
                 else:
                     bot.send_message(chat_id, "⚠️ Нет выданных предметов!", reply_markup=main_keyboard)
                     show_menu(chat_id)
-
             elif text == '📋 Показать инвентарь':
                 show_menu(chat_id)
-
             elif text == '🗓️ События':
                 show_events_menu(chat_id)
-
             else:
                 show_menu(chat_id)
 
@@ -455,7 +335,6 @@ def handle_message(message):
                 user_states[chat_id] = 'add_event_name'
                 bot.send_message(chat_id, "📝 *Введите название события:* (стоп для выхода)",
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
-
             elif text == '🗑️ Удалить событие':
                 user_states[chat_id] = 'delete_event'
                 events = get_events()
@@ -466,7 +345,6 @@ def handle_message(message):
                 else:
                     bot.send_message(chat_id, "⚠️ Нет событий!", reply_markup=events_keyboard)
                     show_events_menu(chat_id)
-
             elif text == '📅 Посмотреть события':
                 keyboard = types.InlineKeyboardMarkup(row_width=3)
                 keyboard.add(
@@ -476,11 +354,9 @@ def handle_message(message):
                 )
                 bot.send_message(chat_id, "📅 *Выберите период:*",
                                parse_mode='Markdown', reply_markup=keyboard)
-
             elif text == '🔙 Назад в меню':
                 bot.send_message(chat_id, "👌 Возвращаемся в главное меню", reply_markup=main_keyboard)
                 show_menu(chat_id)
-
             else:
                 show_events_menu(chat_id)
 
@@ -514,6 +390,122 @@ def handle_message(message):
         bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", reply_markup=main_keyboard)
         show_menu(chat_id)
 
+# Обработчик callback-запросов
+def handle_callback_query(call):
+    chat_id = call.message.chat.id
+    data = call.data.split(':')
+    action = data[0]
+    item_or_id = data[1] if len(data) > 1 else None
+
+    try:
+        if action == 'give':
+            if item_or_id == 'cancel':
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
+                show_menu(chat_id)
+                return
+            state = user_states.get(chat_id, 'main')
+            if isinstance(state, tuple) and state[0] == 'give_items':
+                recipient = state[1]
+                inventory = get_inventory()
+                if item_or_id in inventory:
+                    if inventory[item_or_id] is None:
+                        update_item_owner(item_or_id, recipient)
+                        bot.delete_message(chat_id, call.message.message_id)
+                        bot.send_message(chat_id, f"✅ *{item_or_id}* выдан *{recipient}*!",
+                                       parse_mode='Markdown', reply_markup=main_keyboard)
+                        show_menu(chat_id)
+                    else:
+                        bot.delete_message(chat_id, call.message.message_id)
+                        bot.send_message(chat_id, f"⚠️ *{item_or_id}* уже выдан *{inventory[item_or_id]}*!",
+                                       parse_mode='Markdown', reply_markup=main_keyboard)
+                        show_menu(chat_id)
+        elif action == 'delete':
+            if item_or_id == 'cancel':
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
+                show_menu(chat_id)
+                return
+            if item_or_id:
+                delete_item(item_or_id)
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, f"✅ *{item_or_id}* удален из инвентаря!",
+                               parse_mode='Markdown', reply_markup=main_keyboard)
+                show_menu(chat_id)
+        elif action == 'return':
+            if item_or_id == 'cancel':
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=main_keyboard)
+                show_menu(chat_id)
+                return
+            elif item_or_id == 'all':
+                inventory = get_inventory()
+                returned_count = 0
+                for item in inventory:
+                    if inventory[item] is not None:
+                        update_item_owner(item, None)
+                        returned_count += 1
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, f"✅ Возвращено всех предметов: *{returned_count}*",
+                               parse_mode='Markdown', reply_markup=main_keyboard)
+                show_menu(chat_id)
+            elif item_or_id:
+                inventory = get_inventory()
+                if item_or_id in inventory and inventory[item_or_id] is not None:
+                    update_item_owner(item_or_id, None)
+                    bot.delete_message(chat_id, call.message.message_id)
+                    bot.send_message(chat_id, f"✅ *{item_or_id}* возвращен в инвентарь!",
+                                   parse_mode='Markdown', reply_markup=main_keyboard)
+                    show_menu(chat_id)
+                else:
+                    bot.delete_message(chat_id, call.message.message_id)
+                    bot.send_message(chat_id, f"ℹ️ *{item_or_id}* уже в инвентаре!",
+                                   parse_mode='Markdown', reply_markup=main_keyboard)
+                    show_menu(chat_id)
+        elif action == 'delete_event':
+            if item_or_id == 'cancel':
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, "👌 Возвращаемся в меню событий", reply_markup=events_keyboard)
+                show_events_menu(chat_id)
+                return
+            if item_or_id:
+                delete_event(int(item_or_id))
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, f"✅ Событие удалено!",
+                               parse_mode='Markdown', reply_markup=events_keyboard)
+                show_events_menu(chat_id)
+        elif action == 'view_events':
+            bot.delete_message(chat_id, call.message.message_id)
+            period = item_or_id
+            show_events(chat_id, period)
+            show_events_menu(chat_id)
+
+    except Exception as e:
+        logging.error(f"Ошибка при обработке callback от {chat_id}: {e}")
+        bot.delete_message(chat_id, call.message.message_id)
+        bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", reply_markup=main_keyboard)
+        show_menu(chat_id)
+
+# Flask-роут для обработки webhook
+@app.route('/' + TOKEN, methods=['POST'])
+def webhook():
+    update = telebot.types.Update.de_json(request.get_json())
+    if update.message:
+        handle_message(update.message)
+    if update.callback_query:
+        handle_callback_query(update.callback_query)
+    return 'OK', 200
+
+# Настройка webhook при запуске
+def set_webhook():
+    webhook_url = os.getenv('WEBHOOK_URL')
+    if not webhook_url:
+        logging.error("WEBHOOK_URL не установлен")
+        raise ValueError("WEBHOOK_URL не установлен")
+    bot.remove_webhook()
+    bot.set_webhook(url=webhook_url + '/' + TOKEN)
+    logging.info(f"Webhook установлен: {webhook_url}/{TOKEN}")
+
 # Очистка старых состояний пользователей
 def clean_old_states():
     while True:
@@ -524,15 +516,9 @@ def clean_old_states():
                 del user_states[chat_id]
 
 # Запуск потока для очистки состояний
-threading.Thread(target=clean_old_states, daemon=True).start()
-
-# Запуск бота
 if __name__ == '__main__':
-    print("🤖 Бот запущен...")
-    logging.info("Бот запущен")
-    while True:
-        try:
-            bot.polling(none_stop=True)
-        except Exception as e:
-            logging.error(f"Ошибка в polling: {e}")
-            time.sleep(5)  # Пауза перед перезапуском
+    print("🤖 Бот запускается...")
+    logging.info("Бот запускается")
+    threading.Thread(target=clean_old_states, daemon=True).start()
+    set_webhook()
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
