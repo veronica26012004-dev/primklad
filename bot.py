@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import urllib.parse
 
 # Настройка логирования
-logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -18,6 +18,11 @@ TOKEN = os.getenv('BOT_TOKEN')
 if not TOKEN:
     logging.error("BOT_TOKEN не найден в переменных окружения")
     raise ValueError("BOT_TOKEN не установлен")
+
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+if not WEBHOOK_URL:
+    logging.error("WEBHOOK_URL не установлен")
+    raise ValueError("WEBHOOK_URL не установлен")
 
 # Инициализация бота и Flask
 bot = telebot.TeleBot(TOKEN)
@@ -97,7 +102,6 @@ def find_item_in_db(item_name):
         cursor.execute('SELECT item FROM inventory')
         all_items = cursor.fetchall()
         conn.close()
-
         normalized_search = normalize_text(item_name)
         for (db_item,) in all_items:
             if normalize_text(db_item) == normalized_search:
@@ -489,22 +493,32 @@ def handle_callback_query(call):
 # Flask-роут для обработки webhook
 @app.route('/' + TOKEN, methods=['POST'])
 def webhook():
-    update = telebot.types.Update.de_json(request.get_json())
-    if update.message:
-        handle_message(update.message)
-    if update.callback_query:
-        handle_callback_query(update.callback_query)
-    return 'OK', 200
+    try:
+        update = telebot.types.Update.de_json(request.get_json())
+        if update.message:
+            handle_message(update.message)
+        if update.callback_query:
+            handle_callback_query(update.callback_query)
+        return 'OK', 200
+    except Exception as e:
+        logging.error(f"Ошибка в webhook: {e}")
+        return 'Error', 500
+
+# Роут для проверки работоспособности
+@app.route('/')
+def index():
+    return 'Bot is running', 200
 
 # Настройка webhook при запуске
 def set_webhook():
-    webhook_url = os.getenv('WEBHOOK_URL')
-    if not webhook_url:
-        logging.error("WEBHOOK_URL не установлен")
-        raise ValueError("WEBHOOK_URL не установлен")
+    webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
     bot.remove_webhook()
-    bot.set_webhook(url=webhook_url + '/' + TOKEN)
-    logging.info(f"Webhook установлен: {webhook_url}/{TOKEN}")
+    success = bot.set_webhook(url=webhook_url)
+    if success:
+        logging.info(f"Webhook успешно установлен: {webhook_url}")
+    else:
+        logging.error("Не удалось установить webhook")
+        raise ValueError("Не удалось установить webhook")
 
 # Очистка старых состояний пользователей
 def clean_old_states():
@@ -512,13 +526,14 @@ def clean_old_states():
         time.sleep(3600)  # Каждые 60 минут
         current_time = time.time()
         for chat_id in list(user_states.keys()):
-            if current_time - user_states.get(chat_id, {}).get('last_activity', 0) > 3600:
+            if isinstance(user_states[chat_id], dict) and current_time - user_states[chat_id].get('last_activity', 0) > 3600:
                 del user_states[chat_id]
 
-# Запуск потока для очистки состояний
+# Запуск приложения
 if __name__ == '__main__':
-    print("🤖 Бот запускается...")
-    logging.info("Бот запускается")
+    logging.info("Запуск бота...")
     threading.Thread(target=clean_old_states, daemon=True).start()
     set_webhook()
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+    port = int(os.getenv('PORT', 8443))  # Используем PORT из окружения или 8443
+    logging.info(f"Запуск Flask на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
