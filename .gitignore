@@ -1,5 +1,5 @@
-__pycache__/
-*.pyc
-.env
-inventory.db
+pycache/ 
+*.pyc 
+.env 
+inventory.db 
 .venv/
