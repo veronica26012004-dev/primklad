@@ -12,12 +12,9 @@ logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s 
 
 # Загрузка переменных окружения
 load_dotenv()
-TOKEN = os.getenv('BOT_TOKEN')
-if not TOKEN:
-    logging.error("BOT_TOKEN не найден в переменных окружения")
-    raise ValueError("BOT_TOKEN не установлен")
-
+TOKEN = '8464322471:AAE3QyJrHrCS8lwAj4jD8NLuOy5kYnToumM'
 bot = telebot.TeleBot(TOKEN)
+
 
 # Блокировка для thread-safe доступа к БД
 db_lock = threading.Lock()
