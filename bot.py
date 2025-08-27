@@ -495,10 +495,13 @@ def handle_callback_query(call):
 def webhook():
     try:
         update = telebot.types.Update.de_json(request.get_json())
-        if update.message:
-            handle_message(update.message)
-        if update.callback_query:
-            handle_callback_query(update.callback_query)
+        if update:
+            if update.message:
+                logging.info(f"Получено сообщение от {update.message.chat.id}: {update.message.text}")
+                handle_message(update.message)
+            if update.callback_query:
+                logging.info(f"Получен callback от {update.callback_query.message.chat.id}: {update.callback_query.data}")
+                handle_callback_query(update.callback_query)
         return 'OK', 200
     except Exception as e:
         logging.error(f"Ошибка в webhook: {e}")
@@ -512,13 +515,15 @@ def index():
 # Настройка webhook при запуске
 def set_webhook():
     webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-    bot.remove_webhook()
-    success = bot.set_webhook(url=webhook_url)
-    if success:
-        logging.info(f"Webhook успешно установлен: {webhook_url}")
-    else:
-        logging.error("Не удалось установить webhook")
-        raise ValueError("Не удалось установить webhook")
+    try:
+        bot.remove_webhook()
+        success = bot.set_webhook(url=webhook_url)
+        if success:
+            logging.info(f"Webhook успешно установлен: {webhook_url}")
+        else:
+            logging.error("Не удалось установить webhook")
+    except Exception as e:
+        logging.error(f"Ошибка при установке webhook: {e}")
 
 # Очистка старых состояний пользователей
 def clean_old_states():
@@ -533,7 +538,10 @@ def clean_old_states():
 if __name__ == '__main__':
     logging.info("Запуск бота...")
     threading.Thread(target=clean_old_states, daemon=True).start()
-    set_webhook()
-    port = int(os.getenv('PORT', 8443))  # Используем PORT из окружения или 8443
+    try:
+        set_webhook()
+    except Exception as e:
+        logging.error(f"Ошибка при запуске webhook: {e}")
+    port = int(os.getenv('PORT', 8443))
     logging.info(f"Запуск Flask на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
