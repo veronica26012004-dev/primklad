@@ -202,6 +202,10 @@ def get_events(period=None):
                 params = ()  # Явно задаем пустой кортеж для запроса без параметров
             cursor.execute(query, params)
             events = cursor.fetchall()
+            # Дополнительная проверка содержимого таблицы
+            cursor.execute('SELECT count(*) FROM events')
+            event_count = cursor.fetchone()[0]
+            logging.info(f"Total events in database: {event_count}")
             # Проверка формата дат
             validated_events = []
             for event in events:
@@ -502,10 +506,11 @@ def handle_callback_query(call):
                     selected_items.append(param)
                 user_states[chat_id] = ('return_items', selected_items, storage)
                 inventory = get_inventory(storage)
-                available_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
-                                 if issued == 1 and item_id not in selected_items]
-                if available_items:
-                    keyboard = create_item_keyboard(available_items, 'return')
+                issued_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
+                               if issued == 1 and item_id not in selected_items]
+                logging.info(f"Issued items for return in {storage}: {issued_items}")
+                if issued_items:
+                    keyboard = create_item_keyboard(issued_items, 'return')
                     selected_text = ", ".join([item_name for item_id, item_name, _, _, _ in inventory 
                                              if item_id in selected_items]) or "ничего не выбрано"
                     bot.edit_message_text(
@@ -516,6 +521,15 @@ def handle_callback_query(call):
                     bot.send_message(chat_id, "⚠️ Больше нет выданных предметов!", reply_markup=create_storage_keyboard())
                     show_inventory(chat_id, storage)
                     user_states[chat_id] = ('storage', storage)
+                return
+            # Поддержка возврата единственного предмета без множественного выбора
+            if param:
+                return_item(param)
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, f"✅ Предмет возвращен в инвентарь!",
+                               parse_mode='Markdown', reply_markup=create_storage_keyboard())
+                show_inventory(chat_id, storage)
+                user_states[chat_id] = ('storage', storage)
 
         elif action == 'view_events':
             if param == 'cancel':
@@ -611,6 +625,7 @@ def handle_message(message):
                 inventory = get_inventory(storage)
                 issued_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
                                if issued == 1]
+                logging.info(f"Issued items for return in {storage}: {issued_items}")
                 if issued_items:
                     keyboard = create_item_keyboard(issued_items, 'return')
                     bot.send_message(chat_id, f"📦 *Выберите предметы для возврата ({storage}):*",
