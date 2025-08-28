@@ -4,21 +4,21 @@ from telebot import types
 import threading
 import logging
 import os
-from dotenv import load_dotenv
-import time
 from datetime import datetime, timedelta
 from uuid import uuid4
 
 # Настройка логирования
-logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
+)
 
-# Загрузка переменных окружения
-load_dotenv()
-TOKEN = os.getenv('BOT_TOKEN')
-if not TOKEN:
-    logging.error("BOT_TOKEN не найден в переменных окружения")
-    raise ValueError("BOT_TOKEN не установлен")
-
+# Загрузка токена из переменной окружения
+TOKEN = os.getenv('BOT_TOKEN', '8464322471:AAE3QyJrHrCS8lwAj4jD8NLuOy5kYnToumM')
 bot = telebot.TeleBot(TOKEN)
 
 # Блокировка для thread-safe доступа к БД
@@ -93,14 +93,6 @@ def update_item_owner(item_id, owner):
         conn.commit()
         conn.close()
 
-def mark_item_issued(item_id):
-    with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('UPDATE items SET issued = 1 WHERE id = ?', (item_id,))
-        conn.commit()
-        conn.close()
-
 def return_item(item_id):
     with db_lock:
         conn = sqlite3.connect('inventory.db', check_same_thread=False)
@@ -164,7 +156,7 @@ def delete_event(event_id):
         conn.commit()
         conn.close()
 
-# Создаем клавиатуру главного меню
+# Создаем клавиатуры
 def create_main_menu_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
@@ -174,7 +166,6 @@ def create_main_menu_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-# Создаем клавиатуру кладовой
 def create_storage_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
@@ -188,7 +179,6 @@ def create_storage_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-# Создаем клавиатуру событий
 def create_events_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
@@ -200,7 +190,6 @@ def create_events_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-# Создаем inline-клавиатуру для предметов
 def create_item_keyboard(items, action):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     for item_id, item_name, _, _ in sorted(items, key=lambda x: x[1]):
@@ -211,7 +200,6 @@ def create_item_keyboard(items, action):
         keyboard.add(types.InlineKeyboardButton(text="✅ Выдано", callback_data=f"{action}:done"))
     return keyboard
 
-# Создаем inline-клавиатуру для событий
 def create_event_keyboard(events, action):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     for event_id, event_name, event_date in sorted(events, key=lambda x: x[2]):
@@ -221,7 +209,6 @@ def create_event_keyboard(events, action):
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
     return keyboard
 
-# Создаем inline-клавиатуру для выбора периода событий
 def create_period_keyboard():
     keyboard = types.InlineKeyboardMarkup(row_width=3)
     buttons = [
@@ -233,13 +220,12 @@ def create_period_keyboard():
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data="view_events:cancel"))
     return keyboard
 
-# Функция для показа главного меню
+# Функции отображения
 def show_main_menu(chat_id):
     text = "📋 *Главное меню*\n\nВыберите раздел:"
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_main_menu_keyboard())
     user_states[chat_id] = 'main_menu'
 
-# Функция для показа инвентаря
 def show_inventory(chat_id):
     inventory = get_inventory()
     text = "📦 *ИНВЕНТАРЬ:*\n\n"
@@ -291,7 +277,7 @@ def handle_callback_query(call):
                     recipient = state[1]
                     selected_items = state[2]
                     for item_id in selected_items:
-                        mark_item_issued(item_id)
+                        update_item_owner(item_id, recipient)
                     bot.delete_message(chat_id, call.message.message_id)
                     bot.send_message(chat_id, f"✅ Предметы выданы *{recipient}*!",
                                    parse_mode='Markdown', reply_markup=create_storage_keyboard())
@@ -538,18 +524,6 @@ def handle_message(message):
         bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", 
                         reply_markup=create_main_menu_keyboard())
         show_main_menu(chat_id)
-
-# Очистка старых состояний
-def clean_old_states():
-    while True:
-        time.sleep(3600)
-        current_time = time.time()
-        for chat_id in list(user_states.keys()):
-            if current_time - user_states.get(chat_id, {}).get('last_activity', 0) > 3600:
-                del user_states[chat_id]
-
-# Запуск потока для очистки состояний
-threading.Thread(target=clean_old_states, daemon=True).start()
 
 # Запуск бота
 if __name__ == '__main__':
