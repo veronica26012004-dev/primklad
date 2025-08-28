@@ -1,3 +1,25 @@
+Я понял, что вы хотите упростить выдачу инвентаря, чтобы вместо выбора получателя и предметов через интерактивные кнопки пользователь просто вводил имя получателя, а затем предметы выдаются напрямую. Также учту, что у вас уже есть две кладовые (Гринбокс 11 и Гринбокс 12), дата вводится словами, и завершение ввода предметов происходит через кнопку "Завершить ввод". Я обновлю код, чтобы при выдаче предметов пользователь вводил только имя получателя, а затем список предметов, которые сразу выдаются этому получателю.
+
+### Основные изменения:
+1. **Упрощение выдачи предметов**:
+   - При выборе действия "🎁 Выдать" бот запрашивает имя получателя.
+   - После ввода имени пользователь вводит названия предметов (по одному на строку).
+   - Предметы, которые уже есть в базе данных для выбранной кладовой, выдаются указанному получателю.
+   - Ввод завершается кнопкой "✅ Завершить ввод".
+   - Если предмет не найден в базе данных, бот сообщает об этом.
+
+2. **Сохранение существующих функций**:
+   - Поддерживаются две кладовые (Гринбокс 11 и Гринбокс 12).
+   - Ввод даты события в формате "ДД месяц ГГГГ" (например, "15 января 2025").
+   - Завершение ввода предметов при добавлении через кнопку "✅ Завершить ввод".
+
+3. **Обновление состояний**:
+   - Состояние `give_who` теперь переходит в `give_items`, где пользователь вводит предметы для выдачи.
+   - Состояние `give_items` хранит имя получателя и кладовую.
+
+Вот обновленный код:
+
+```python
 import sqlite3
 import telebot
 from telebot import types
@@ -116,13 +138,13 @@ def find_item_in_db(item_name, storage):
     with db_lock:
         conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute('SELECT id, item_name FROM items WHERE storage = ?', (storage,))
+        cursor.execute('SELECT id, item_name, issued FROM items WHERE storage = ?', (storage,))
         all_items = cursor.fetchall()
         conn.close()
 
         normalized_search = normalize_text(item_name)
-        for item_id, db_item in all_items:
-            if normalize_text(db_item) == normalized_search:
+        for item_id, db_item, issued in all_items:
+            if normalize_text(db_item) == normalized_search and issued == 0:
                 return item_id, db_item
         return None, None
 
@@ -225,8 +247,6 @@ def create_item_keyboard(items, action):
         callback_data = f"{action}:{item_id}"
         keyboard.add(types.InlineKeyboardButton(text=item_name, callback_data=callback_data))
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
-    if action == 'give':
-        keyboard.add(types.InlineKeyboardButton(text="✅ Выдано", callback_data=f"{action}:done"))
     return keyboard
 
 def create_event_keyboard(events, action):
@@ -299,48 +319,7 @@ def handle_callback_query(call):
     param = data[1] if len(data) > 1 else None
 
     try:
-        if action == 'give':
-            state = user_states.get(chat_id, ('storage', None))
-            storage = state[1] if isinstance(state, tuple) else None
-            if param == 'cancel':
-                bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_storage_keyboard())
-                show_inventory(chat_id, storage)
-                return
-            elif param == 'done':
-                if isinstance(state, tuple) and state[0] == 'give_items':
-                    recipient = state[1]
-                    selected_items = state[2]
-                    for item_id in selected_items:
-                        update_item_owner(item_id, recipient)
-                    bot.delete_message(chat_id, call.message.message_id)
-                    bot.send_message(chat_id, f"✅ Предметы выданы *{recipient}*!",
-                                   parse_mode='Markdown', reply_markup=create_storage_keyboard())
-                    show_inventory(chat_id, storage)
-                    user_states[chat_id] = ('storage', storage)
-                    return
-            if isinstance(state, tuple) and state[0] == 'give_items':
-                recipient = state[1]
-                selected_items = state[2]
-                if param not in selected_items:
-                    selected_items.append(param)
-                user_states[chat_id] = ('give_items', recipient, selected_items, storage)
-                inventory = get_inventory(storage)
-                available_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
-                                 if issued == 0 and item_id not in selected_items]
-                if available_items:
-                    keyboard = create_item_keyboard(available_items, 'give')
-                    selected_text = ", ".join([item_name for item_id, item_name, _, _, _ in inventory 
-                                             if item_id in selected_items]) or "ничего не выбрано"
-                    bot.edit_message_text(
-                        f"👤 Получатель: *{recipient}*\n📦 *Выберите предметы для выдачи* (выбрано: {selected_text}):",
-                        chat_id, call.message.message_id, parse_mode='Markdown', reply_markup=keyboard)
-                else:
-                    bot.delete_message(chat_id, call.message.message_id)
-                    bot.send_message(chat_id, "⚠️ Больше нет доступных предметов!", reply_markup=create_storage_keyboard())
-                    show_inventory(chat_id, storage)
-
-        elif action == 'delete':
+        if action == 'delete':
             state = user_states.get(chat_id, ('storage', None))
             storage = state[1] if isinstance(state, tuple) else None
             if param == 'cancel':
@@ -485,7 +464,7 @@ def handle_message(message):
             elif text == '📋 Показать инвентарь':
                 show_inventory(chat_id, storage)
             elif text == '✅ Завершить ввод':
-                bot.send_message(chat_id, "⚠️ Вы не находитесь в режиме добавления предметов!", 
+                bot.send_message(chat_id, "⚠️ Вы не находитесь в режиме добавления или выдачи предметов!", 
                                reply_markup=create_storage_keyboard())
                 show_inventory(chat_id, storage)
 
@@ -518,17 +497,40 @@ def handle_message(message):
             if text:
                 recipient = ' '.join(text.strip().split())
                 user_states[chat_id] = ('give_items', recipient, [], storage)
-                inventory = get_inventory(storage)
-                available_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
-                                 if issued == 0]
-                if available_items:
-                    keyboard = create_item_keyboard(available_items, 'give')
-                    bot.send_message(chat_id, f"👤 Получатель: *{recipient}*\n📦 *Выберите предметы для выдачи ({storage}):*",
-                                   parse_mode='Markdown', reply_markup=keyboard)
-                else:
-                    bot.send_message(chat_id, "⚠️ Нет доступных предметов для выдачи!", 
+                bot.send_message(chat_id, f"👤 Получатель: *{recipient}*\n📦 *Введите предметы для выдачи (по одному на строку, только доступные предметы из {storage}):*\n(нажмите 'Завершить ввод' для завершения)",
+                               parse_mode='Markdown', reply_markup=create_add_items_keyboard())
+            else:
+                bot.send_message(chat_id, "⚠️ Имя получателя не может быть пустым!", 
+                               parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
+
+        elif isinstance(state, tuple) and state[0] == 'give_items':
+            recipient, issued_items, storage = state[1], state[2], state[3]
+            if text == '✅ Завершить ввод':
+                if issued_items:
+                    bot.send_message(chat_id, f"✅ Предметы выданы *{recipient}*: {', '.join(issued_items)}", 
                                    reply_markup=create_storage_keyboard())
-                    show_inventory(chat_id, storage)
+                else:
+                    bot.send_message(chat_id, "ℹ️ Не выдано ни одного предмета", 
+                                   reply_markup=create_storage_keyboard())
+                show_inventory(chat_id, storage)
+            else:
+                lines = text.split('\n')
+                not_found_items = []
+                for line in lines:
+                    line = line.strip()
+                    if line:
+                        item_id, item_name = find_item_in_db(line, storage)
+                        if item_id and item_name:
+                            update_item_owner(item_id, recipient)
+                            issued_items.append(item_name)
+                        else:
+                            not_found_items.append(line)
+                if not_found_items:
+                    bot.send_message(chat_id, f"⚠️ Следующие предметы не найдены или уже выданы: {', '.join(not_found_items)}",
+                                   parse_mode='Markdown')
+                bot.send_message(chat_id, "📝 Продолжайте вводить предметы или нажмите 'Завершить ввод'",
+                               parse_mode='Markdown', reply_markup=create_add_items_keyboard())
+                user_states[chat_id] = ('give_items', recipient, issued_items, storage)
 
         elif state == 'events':
             if text == '🔙 В главное меню':
@@ -598,3 +600,37 @@ if __name__ == '__main__':
         except Exception as e:
             logging.error(f"Ошибка в polling: {e}")
             time.sleep(5)
+```
+
+### Ключевые изменения:
+1. **Упрощенная выдача предметов**:
+   - При выборе "🎁 Выдать" бот запрашивает имя получателя (состояние `give_who`).
+   - После ввода имени пользователь переходит в состояние `give_items`, где вводит названия предметов (по одному на строку).
+   - Функция `find_item_in_db` проверяет, есть ли предмет в базе данных для выбранной кладовой и не выдан ли он (`issued == 0`).
+   - Если предмет найден, он сразу выдается получателю через `update_item_owner`.
+   - Если предмет не найден или уже выдан, он добавляется в список `not_found_items`, и бот сообщает об этом.
+   - Ввод завершается кнопкой "✅ Завершить ввод", после чего бот подтверждает выдачу предметов или сообщает, что ничего не выдано.
+
+2. **Обновление функции `find_item_in_db`**:
+   - Теперь функция также проверяет, что предмет не выдан (`issued == 0`), чтобы выдавать только доступные предметы.
+
+3. **Сохранение предыдущих изменений**:
+   - Поддержка двух кладовых (Гринбокс 11 и Гринбокс 12) с полем `storage` в базе данных.
+   - Ввод даты события в формате "ДД месяц ГГГГ" с преобразованием в `ГГГГ-ММ-ДД` для базы данных.
+   - Завершение ввода предметов при добавлении через кнопку "✅ Завершить ввод".
+
+4. **Обновление состояний**:
+   - Состояние `give_who` теперь кортеж `('give_who', storage)`.
+   - Состояние `give_items` теперь кортеж `('give_items', recipient, issued_items, storage)`, где `issued_items` — список выданных предметов для отображения в итоговом сообщении.
+
+5. **Удаление ненужного кода**:
+   - Удалены обработчики callback-запросов для действия `give`, так как выбор предметов через кнопки больше не используется.
+
+### Примечания:
+- Пользователь должен вводить точные названия предметов, как они записаны в базе данных (с учетом нормализации текста, т.е. лишние пробелы и регистр игнорируются).
+- Если предмет не найден или уже выдан, бот добавляет его в список `not_found_items` и сообщает об этом после обработки строки.
+- Бот возвращается в меню кладовой после завершения ввода предметов для выдачи.
+- Все операции логируются, и обработка ошибок сохраняет стабильность бота.
+- База данных хранит предметы с указанием кладовой (`storage`), и операции выполняются только для выбранной кладовой.
+
+Если есть дополнительные пожелания или что-то нужно доработать (например, добавить проверку на частичное совпадение названий предметов или другие функции), дайте знать!
