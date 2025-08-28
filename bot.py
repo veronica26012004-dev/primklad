@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta
 from uuid import uuid4
 import time
+from flask import Flask, request
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,7 +21,11 @@ logging.basicConfig(
 
 # Загрузка токена из переменной окружения
 TOKEN = os.getenv('BOT_TOKEN', '8464322471:AAE3QyJrHrCS8lwAj4jD8NLuOy5kYnToumM')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')  # URL вашего приложения на Render
+PORT = int(os.getenv('PORT', 10000))  # Порт для Render
+
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
 # Блокировка для thread-safe доступа к БД
 db_lock = threading.Lock()
@@ -799,13 +804,31 @@ def handle_message(message):
                         parse_mode='Markdown', reply_markup=create_main_menu_keyboard())
         show_main_menu(chat_id)
 
-# Запуск бота
+# Webhook обработчики для Render
+@app.route('/')
+def index():
+    return "🤖 Telegram Bot is running!"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        return 'Invalid content type', 403
+
+# Запуск бота на Render
 if __name__ == '__main__':
-    print("🤖 Бот запущен...")
-    logging.info("Бот запущен")
-    while True:
-        try:
-            bot.polling(none_stop=True)
-        except Exception as e:
-            logging.error(f"Ошибка в polling: {e}")
-            time.sleep(5)
+    # Удаляем предыдущие webhook'и
+    bot.remove_webhook()
+    time.sleep(1)
+    
+    # Устанавливаем webhook
+    if WEBHOOK_URL:
+        bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+        logging.info(f"Webhook set to: {WEBHOOK_URL}/webhook")
+    
+    # Запускаем Flask приложение
+    app.run(host='0.0.0.0', port=PORT, debug=False)
