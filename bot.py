@@ -34,26 +34,31 @@ MONTHS = {
 # Инициализация базы данных
 def init_database():
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS items (
-                id TEXT PRIMARY KEY,
-                item_name TEXT NOT NULL,
-                owner TEXT,
-                issued INTEGER DEFAULT 0,
-                storage TEXT NOT NULL
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY,
-                event_name TEXT NOT NULL,
-                event_date TEXT NOT NULL
-            )
-        ''')
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS items (
+                    id TEXT PRIMARY KEY,
+                    item_name TEXT NOT NULL,
+                    owner TEXT,
+                    issued INTEGER DEFAULT 0,
+                    storage TEXT NOT NULL
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS events (
+                    id TEXT PRIMARY KEY,
+                    event_name TEXT NOT NULL,
+                    event_date TEXT NOT NULL
+                )
+            ''')
+            conn.commit()
+            logging.info("Database initialized successfully")
+        except Exception as e:
+            logging.error(f"Error initializing database: {e}")
+        finally:
+            conn.close()
 
 init_database()
 
@@ -67,105 +72,146 @@ def normalize_text(text):
 # Функции для работы с предметами
 def get_inventory(storage=None):
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        if storage:
-            cursor.execute('SELECT id, item_name, owner, issued, storage FROM items WHERE storage = ?', (storage,))
-        else:
-            cursor.execute('SELECT id, item_name, owner, issued, storage FROM items')
-        items = cursor.fetchall()
-        conn.close()
-        return items
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            if storage:
+                cursor.execute('SELECT id, item_name, owner, issued, storage FROM items WHERE storage = ?', (storage,))
+            else:
+                cursor.execute('SELECT id, item_name, owner, issued, storage FROM items')
+            items = cursor.fetchall()
+            logging.info(f"Fetched inventory for storage {storage}: {items}")
+            conn.close()
+            return items
+        except Exception as e:
+            logging.error(f"Error fetching inventory: {e}")
+            return []
 
 def add_item(item_name, storage):
     item_id = str(uuid4())
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO items (id, item_name, owner, issued, storage) VALUES (?, ?, ?, ?, ?)', 
-                      (item_id, item_name, None, 0, storage))
-        conn.commit()
-        conn.close()
-    return item_id
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO items (id, item_name, owner, issued, storage) VALUES (?, ?, ?, ?, ?)', 
+                          (item_id, item_name, None, 0, storage))
+            conn.commit()
+            logging.info(f"Added item: {item_name}, storage: {storage}, id: {item_id}")
+            conn.close()
+            return item_id
+        except Exception as e:
+            logging.error(f"Error adding item {item_name}: {e}")
+            conn.close()
+            return None
 
 def delete_item(item_id):
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM items WHERE id = ?', (item_id,))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM items WHERE id = ?', (item_id,))
+            conn.commit()
+            logging.info(f"Deleted item with id: {item_id}")
+            conn.close()
+        except Exception as e:
+            logging.error(f"Error deleting item {item_id}: {e}")
 
 def update_item_owner(item_id, owner):
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('UPDATE items SET owner = ?, issued = 1 WHERE id = ?', (owner, item_id))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('UPDATE items SET owner = ?, issued = 1 WHERE id = ?', (owner, item_id))
+            conn.commit()
+            logging.info(f"Updated item {item_id} to owner: {owner}")
+            conn.close()
+        except Exception as e:
+            logging.error(f"Error updating item {item_id} owner: {e}")
 
 def return_item(item_id):
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('UPDATE items SET owner = NULL, issued = 0 WHERE id = ?', (item_id,))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('UPDATE items SET owner = NULL, issued = 0 WHERE id = ?', (item_id,))
+            conn.commit()
+            logging.info(f"Returned item with id: {item_id}")
+            conn.close()
+        except Exception as e:
+            logging.error(f"Error returning item {item_id}: {e}")
 
 def find_item_in_db(item_name, storage):
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, item_name FROM items WHERE storage = ?', (storage,))
-        all_items = cursor.fetchall()
-        conn.close()
-
-        normalized_search = normalize_text(item_name)
-        for item_id, db_item in all_items:
-            if normalize_text(db_item) == normalized_search:
-                return item_id, db_item
-        return None, None
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, item_name FROM items WHERE storage = ?', (storage,))
+            all_items = cursor.fetchall()
+            conn.close()
+            normalized_search = normalize_text(item_name)
+            for item_id, db_item in all_items:
+                if normalize_text(db_item) == normalized_search:
+                    return item_id, db_item
+            return None, None
+        except Exception as e:
+            logging.error(f"Error finding item {item_name} in storage {storage}: {e}")
+            return None, None
 
 # Функции для работы с событиями
 def add_event(event_name, event_date):
     event_id = str(uuid4())
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO events (id, event_name, event_date) VALUES (?, ?, ?)',
-                      (event_id, event_name, event_date))
-        conn.commit()
-        conn.close()
-    return event_id
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO events (id, event_name, event_date) VALUES (?, ?, ?)',
+                          (event_id, event_name, event_date))
+            conn.commit()
+            logging.info(f"Added event: {event_name}, date: {event_date}")
+            conn.close()
+            return event_id
+        except Exception as e:
+            logging.error(f"Error adding event {event_name}: {e}")
+            conn.close()
+            return None
 
 def get_events(period=None):
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        query = 'SELECT id, event_name, event_date FROM events'
-        if period == 'week':
-            start_date = datetime.now().strftime('%Y-%m-%d')
-            end_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-            query += ' WHERE event_date BETWEEN ? AND ?'
-            cursor.execute(query, (start_date, end_date))
-        elif period == 'month':
-            start_date = datetime.now().strftime('%Y-%m-%d')
-            end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-            query += ' WHERE event_date BETWEEN ? AND ?'
-            cursor.execute(query, (start_date, end_date))
-        else:
-            cursor.execute(query)
-        events = cursor.fetchall()
-        conn.close()
-        return events
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            query = 'SELECT id, event_name, event_date FROM events'
+            params = ()
+            if period == 'week':
+                start_date = datetime.now().strftime('%Y-%m-%d')
+                end_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+                query += ' WHERE event_date BETWEEN ? AND ?'
+                params = (start_date, end_date)
+            elif period == 'month':
+                start_date = datetime.now().strftime('%Y-%m-%d')
+                end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+                query += ' WHERE event_date BETWEEN ? AND ?'
+                params = (start_date, end_date)
+            cursor.execute(query, params)
+            events = cursor.fetchall()
+            logging.info(f"Fetched events for period {period}: {events}")
+            conn.close()
+            return events
+        except Exception as e:
+            logging.error(f"Error fetching events: {e}")
+            return []
 
 def delete_event(event_id):
     with db_lock:
-        conn = sqlite3.connect('inventory.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM events WHERE id = ?', (event_id,))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect('inventory.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM events WHERE id = ?', (event_id,))
+            conn.commit()
+            logging.info(f"Deleted event with id: {event_id}")
+            conn.close()
+        except Exception as e:
+            logging.error(f"Error deleting event {event_id}: {e}")
 
 # Создаем клавиатуры
 def create_main_menu_keyboard():
@@ -310,8 +356,14 @@ def handle_callback_query(call):
                 return
             elif param == 'done':
                 if isinstance(state, tuple) and state[0] == 'give_items':
-                    recipient = state[1]
-                    selected_items = state[2]
+                    recipient, selected_items, storage = state[1], state[2], state[3]
+                    if not selected_items:
+                        bot.delete_message(chat_id, call.message.message_id)
+                        bot.send_message(chat_id, "⚠️ Вы не выбрали ни одного предмета!", 
+                                       parse_mode='Markdown', reply_markup=create_storage_keyboard())
+                        show_inventory(chat_id, storage)
+                        user_states[chat_id] = ('storage', storage)
+                        return
                     for item_id in selected_items:
                         update_item_owner(item_id, recipient)
                     bot.delete_message(chat_id, call.message.message_id)
@@ -321,9 +373,8 @@ def handle_callback_query(call):
                     user_states[chat_id] = ('storage', storage)
                     return
             if isinstance(state, tuple) and state[0] == 'give_items':
-                recipient = state[1]
-                selected_items = state[2]
-                if param not in selected_items:
+                recipient, selected_items, storage = state[1], state[2], state[3]
+                if param and param not in selected_items:
                     selected_items.append(param)
                 user_states[chat_id] = ('give_items', recipient, selected_items, storage)
                 inventory = get_inventory(storage)
@@ -340,6 +391,7 @@ def handle_callback_query(call):
                     bot.delete_message(chat_id, call.message.message_id)
                     bot.send_message(chat_id, "⚠️ Больше нет доступных предметов!", reply_markup=create_storage_keyboard())
                     show_inventory(chat_id, storage)
+                    user_states[chat_id] = ('storage', storage)
 
         elif action == 'delete':
             if param == 'cancel':
@@ -410,7 +462,7 @@ def handle_callback_query(call):
                 user_states[chat_id] = 'events'
 
     except Exception as e:
-        logging.error(f"Ошибка при обработке callback от {chat_id}: {e}")
+        logging.error(f"Error in callback_query from {chat_id}: {e}")
         bot.delete_message(chat_id, call.message.message_id)
         bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", 
                         reply_markup=create_main_menu_keyboard())
@@ -496,6 +548,7 @@ def handle_message(message):
                     bot.send_message(chat_id, "ℹ️ Не добавлено ни одного предмета", 
                                    reply_markup=create_storage_keyboard())
                 show_inventory(chat_id, storage)
+                user_states[chat_id] = ('storage', storage)
             else:
                 lines = text.split('\n')
                 for line in lines:
@@ -505,27 +558,34 @@ def handle_message(message):
                         if existing_item is None:
                             item_name = ' '.join(line.split())
                             item_id = add_item(item_name, storage)
-                            items.append((item_id, item_name))
+                            if item_id:
+                                items.append((item_id, item_name))
                 bot.send_message(chat_id, "📝 Продолжайте вводить предметы или нажмите 'Завершить ввод'",
                                parse_mode='Markdown', reply_markup=create_add_items_keyboard())
                 user_states[chat_id] = ('add_items', items, storage)
 
         elif isinstance(state, tuple) and state[0] == 'give_who':
             storage = state[1]
-            if text:
+            if text and text.strip():
                 recipient = ' '.join(text.strip().split())
+                if len(recipient) > 50:  # Ограничение длины имени
+                    bot.send_message(chat_id, "⚠️ Имя получателя слишком длинное! Максимум 50 символов.", 
+                                   parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
+                    return
                 user_states[chat_id] = ('give_items', recipient, [], storage)
                 inventory = get_inventory(storage)
                 available_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
                                  if issued == 0]
+                logging.info(f"Available items for {recipient} in {storage}: {available_items}")
                 if available_items:
                     keyboard = create_item_keyboard(available_items, 'give')
                     bot.send_message(chat_id, f"👤 Получатель: *{recipient}*\n📦 *Выберите предметы для выдачи ({storage}):*",
                                    parse_mode='Markdown', reply_markup=keyboard)
                 else:
                     bot.send_message(chat_id, "⚠️ Нет доступных предметов для выдачи!", 
-                                   reply_markup=create_storage_keyboard())
+                                   parse_mode='Markdown', reply_markup=create_storage_keyboard())
                     show_inventory(chat_id, storage)
+                    user_states[chat_id] = ('storage', storage)
             else:
                 bot.send_message(chat_id, "⚠️ Имя получателя не может быть пустым!", 
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
@@ -551,7 +611,7 @@ def handle_message(message):
                     user_states[chat_id] = 'events'
 
         elif state == 'add_event_name':
-            if text:
+            if text and text.strip():
                 user_states[chat_id] = ('add_event_date', text)
                 bot.send_message(chat_id, "📅 *Введите дату события (например, 15 января 2025):*", 
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
@@ -583,9 +643,9 @@ def handle_message(message):
                                parse_mode='Markdown')
 
     except Exception as e:
-        logging.error(f"Ошибка при обработке сообщения от {chat_id}: {e}")
+        logging.error(f"Error processing message from {chat_id}: {e}")
         bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", 
-                        reply_markup=create_main_menu_keyboard())
+                        parse_mode='Markdown', reply_markup=create_main_menu_keyboard())
         show_main_menu(chat_id)
 
 # Запуск бота
