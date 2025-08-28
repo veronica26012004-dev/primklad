@@ -5,8 +5,10 @@ import threading
 import logging
 import os
 from dotenv import load_dotenv
+from flask import Flask, request
 import time
 from datetime import datetime, timedelta
+import json
 
 # Настройка логирования
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,11 +16,14 @@ logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s 
 # Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
-if not TOKEN:
-    logging.error("BOT_TOKEN не найден в переменных окружения")
-    raise ValueError("BOT_TOKEN не установлен")
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # e.g., https://your-app-name.onrender.com/bot
+if not TOKEN or not WEBHOOK_URL:
+    logging.error("BOT_TOKEN или WEBHOOK_URL не найдены в переменных окружения")
+    raise ValueError("BOT_TOKEN или WEBHOOK_URL не установлены")
 
+# Инициализация бота и Flask
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
 # Блокировка для thread-safe доступа к БД
 db_lock = threading.Lock()
@@ -62,7 +67,7 @@ def get_inventory():
         cursor.execute('SELECT id, item, owner FROM inventory ORDER BY item')
         items = cursor.fetchall()
         conn.close()
-        return items  # Возвращает список кортежей (id, item, owner)
+        return items
 
 def add_item(item_name):
     with db_lock:
@@ -140,7 +145,7 @@ def delete_event(event_id):
         conn.commit()
         conn.close()
 
-# Создаем клавиатуру главного меню
+# Клавиатуры
 def create_start_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
@@ -150,7 +155,6 @@ def create_start_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-# Создаем клавиатуру кладовой
 def create_warehouse_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
@@ -164,7 +168,6 @@ def create_warehouse_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-# Создаем клавиатуру событий
 def create_events_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
@@ -176,7 +179,6 @@ def create_events_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-# Создаем inline-клавиатуру для предметов
 def create_item_keyboard(items, action):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     for item_id, item, _ in sorted(items, key=lambda x: x[1]):
@@ -187,7 +189,6 @@ def create_item_keyboard(items, action):
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
     return keyboard
 
-# Создаем inline-клавиатуру для событий
 def create_event_keyboard(events, action):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     for event_id, event, date in sorted(events, key=lambda x: x[2]):
@@ -197,7 +198,6 @@ def create_event_keyboard(events, action):
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
     return keyboard
 
-# Создаем клавиатуру для выбора периода событий
 def create_period_keyboard():
     keyboard = types.InlineKeyboardMarkup(row_width=3)
     buttons = [
@@ -209,12 +209,11 @@ def create_period_keyboard():
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data="show_events:cancel"))
     return keyboard
 
-# Функция для показа главного меню
+# Функции меню
 def show_start_menu(chat_id):
     bot.send_message(chat_id, "🏠 *Главное меню*", parse_mode='Markdown', reply_markup=create_start_keyboard())
     user_states[chat_id] = 'start'
 
-# Функция для показа меню кладовой
 def show_warehouse_menu(chat_id):
     inventory = get_inventory()
     text = "📦 *ИНВЕНТАРЬ:*\n\n"
@@ -370,11 +369,14 @@ def handle_callback_query(call):
 
     except Exception as e:
         logging.error(f"Ошибка при обработке callback от {chat_id}: {e}")
-        bot.delete_message(chat_id, call.message.message_id)
-        bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", reply_markup=create_start_keyboard())
-        show_start_menu(chat_id)
+        try:
+            bot.delete_message(chat_id, call.message.message_id)
+            bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", reply_markup=create_start_keyboard())
+            show_start_menu(chat_id)
+        except Exception as send_error:
+            logging.error(f"Ошибка при отправке сообщения об ошибке: {send_error}")
 
-# Основной обработчик сообщений
+# Обработчик сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     chat_id = message.chat.id
@@ -494,13 +496,27 @@ def handle_message(message):
 
     except Exception as e:
         logging.error(f"Ошибка при обработке сообщения от {chat_id}: {e}")
-        bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", reply_markup=create_start_keyboard())
-        show_start_menu(chat_id)
+        try:
+            bot.send_message(chat_id, "⚠️ Произошла ошибка. Пожалуйста, попробуйте снова.", reply_markup=create_start_keyboard())
+            show_start_menu(chat_id)
+        except Exception as send_error:
+            logging.error(f"Ошибка при отправке сообщения об ошибке: {send_error}")
+
+# Flask webhook endpoint
+@app.route('/bot', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        return '', 403
 
 # Очистка старых состояний пользователей
 def clean_old_states():
     while True:
-        time.sleep(3600)  # Каждые 60 минут
+        time.sleep(3600)
         current_time = time.time()
         for chat_id in list(user_states.keys()):
             if current_time - user_states.get(chat_id, {}).get('last_activity', 0) > 3600:
@@ -509,13 +525,24 @@ def clean_old_states():
 # Запуск потока для очистки состояний
 threading.Thread(target=clean_old_states, daemon=True).start()
 
-# Запуск бота
+# Настройка вебхука
+def set_webhook():
+    try:
+        bot.remove_webhook()
+        time.sleep(0.1)
+        bot.set_webhook(url=WEBHOOK_URL)
+        logging.info(f"Webhook установлен на {WEBHOOK_URL}")
+        print(f"Webhook установлен на {WEBHOOK_URL}")
+    except Exception as e:
+        logging.error(f"Ошибка при установке webhook: {e}")
+        print(f"Ошибка при установке webhook: {e}")
+
 if __name__ == '__main__':
-    print("🤖 Бот запущен...")
-    logging.info("Бот запущен")
-    while True:
-        try:
-            bot.polling(none_stop=True)
-        except Exception as e:
-            logging.error(f"Ошибка в polling: {e}")
-            time.sleep(5)
+    print("🤖 Настройка вебхука...")
+    logging.info("Настройка вебхука")
+    set_webhook()
+    print("🤖 Бот запущен через вебхук...")
+    logging.info("Бот запущен через вебхук")
+    # Bind to the port provided by Render
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
