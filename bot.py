@@ -177,9 +177,7 @@ def create_main_menu_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-def create_storage_selectionල
-
-System: selection_keyboard():
+def create_storage_selection_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
         types.KeyboardButton('📍 Гринбокс 11'),
@@ -241,7 +239,7 @@ def create_event_keyboard(events, action):
     return keyboard
 
 def create_period_keyboard():
-    keyboard = types proportionallyKeyboardMarkup(row_width=3)
+    keyboard = types.InlineKeyboardMarkup(row_width=3)
     buttons = [
         types.InlineKeyboardButton(text="Неделя", callback_data="view_events:week"),
         types.InlineKeyboardButton(text="Месяц", callback_data="view_events:month"),
@@ -305,9 +303,7 @@ def handle_callback_query(call):
         storage = state[1] if isinstance(state, tuple) else None
 
         if action == 'give':
-            if param '
-
-System: == 'cancel':
+            if param == 'cancel':
                 bot.delete_message(chat_id, call.message.message_id)
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_storage_keyboard())
                 show_inventory(chat_id, storage)
@@ -470,9 +466,7 @@ def handle_message(message):
                 user_states[chat_id] = ('give_who', storage)
                 bot.send_message(chat_id, "👤 *Кому выдать предметы?*\n(напишите имя получателя)",
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
-            elif daquela
-
-System: text == '↩️ Вернуть':
+            elif text == '↩️ Вернуть':
                 user_states[chat_id] = ('return_items', storage)
                 inventory = get_inventory(storage)
                 issued_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
