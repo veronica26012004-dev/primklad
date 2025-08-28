@@ -186,38 +186,39 @@ def get_events(period=None):
         try:
             conn = sqlite3.connect('inventory.db', check_same_thread=False)
             cursor = conn.cursor()
-            query = 'SELECT id, event_name, event_date FROM events'
-            params = ()
+            
+            # Получаем текущую дату для фильтрации
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            
             if period == 'week':
-                start_date = datetime.now().strftime('%Y-%m-%d')
                 end_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-                query += ' WHERE event_date BETWEEN ? AND ?'
-                params = (start_date, end_date)
+                cursor.execute('SELECT id, event_name, event_date FROM events WHERE event_date BETWEEN ? AND ? ORDER BY event_date', 
+                              (current_date, end_date))
             elif period == 'month':
-                start_date = datetime.now().strftime('%Y-%m-%d')
                 end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-                query += ' WHERE event_date BETWEEN ? AND ?'
-                params = (start_date, end_date)
+                cursor.execute('SELECT id, event_name, event_date FROM events WHERE event_date BETWEEN ? AND ? ORDER BY event_date', 
+                              (current_date, end_date))
             else:
-                params = ()  # Явно задаем пустой кортеж для запроса без параметров
-            cursor.execute(query, params)
+                # Для 'all' показываем все события, отсортированные по дате
+                cursor.execute('SELECT id, event_name, event_date FROM events ORDER BY event_date')
+            
             events = cursor.fetchall()
-            # Дополнительная проверка содержимого таблицы
-            cursor.execute('SELECT count(*) FROM events')
-            event_count = cursor.fetchone()[0]
-            logging.info(f"Total events in database: {event_count}")
-            # Проверка формата дат
+            
+            # Валидация и фильтрация событий
             validated_events = []
             for event in events:
                 try:
                     event_id, event_name, event_date = event
-                    datetime.strptime(event_date, '%Y-%m-%d')  # Проверка корректности даты
+                    # Проверяем корректность даты
+                    datetime.strptime(event_date, '%Y-%m-%d')
                     validated_events.append(event)
                 except ValueError:
                     logging.warning(f"Invalid date format for event {event_name}: {event_date}")
-            logging.info(f"Fetched events for period {period}: {validated_events}")
+            
+            logging.info(f"Fetched {len(validated_events)} events for period '{period}'")
             conn.close()
             return validated_events
+            
         except Exception as e:
             logging.error(f"Error fetching events: {e}")
             return []
@@ -291,9 +292,18 @@ def create_item_keyboard(items, action):
     for item_id, item_name, _, _, _ in sorted(items, key=lambda x: x[1]):
         callback_data = f"{action}:{item_id}"
         keyboard.add(types.InlineKeyboardButton(text=item_name, callback_data=callback_data))
+    
+    # Добавляем кнопку "Вернуть все" только для возврата
+    if action == 'return':
+        keyboard.add(types.InlineKeyboardButton(text="✅ Вернуть все", callback_data="return:all"))
+    
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
+    
     if action in ['give', 'delete', 'return']:
-        keyboard.add(types.InlineKeyboardButton(text=f"✅ Завершить {'выдачу' if action == 'give' else 'удаление' if action == 'delete' else 'возврат'}", callback_data=f"{action}:done"))
+        keyboard.add(types.InlineKeyboardButton(
+            text=f"✅ Завершить {'выдачу' if action == 'give' else 'удаление' if action == 'delete' else 'возврат'}", 
+            callback_data=f"{action}:done"))
+    
     return keyboard
 
 def create_event_keyboard(events, action):
@@ -367,7 +377,11 @@ def handle_callback_query(call):
 
     try:
         state = user_states.get(chat_id, ('storage', None))
-        storage = state[1] if isinstance(state, tuple) else None
+        if isinstance(state, tuple) and len(state) > 1:
+            storage = state[1]
+        else:
+            storage = None
+            logging.warning(f"No storage found in state for user {chat_id}: {state}")
 
         if action == 'give':
             if param == 'cancel':
@@ -500,6 +514,8 @@ def handle_callback_query(call):
                     show_inventory(chat_id, storage)
                     user_states[chat_id] = ('storage', storage)
                 return
+            
+            # Обработка возврата единственного предмета
             if isinstance(state, tuple) and state[0] == 'return_items':
                 selected_items, storage = state[1], state[2]
                 if param and param not in selected_items:
@@ -517,12 +533,22 @@ def handle_callback_query(call):
                         f"📦 *Выберите предметы для возврата ({storage}):* (выбрано: {selected_text}):",
                         chat_id, call.message.message_id, parse_mode='Markdown', reply_markup=keyboard)
                 else:
-                    bot.delete_message(chat_id, call.message.message_id)
-                    bot.send_message(chat_id, "⚠️ Больше нет выданных предметов!", reply_markup=create_storage_keyboard())
-                    show_inventory(chat_id, storage)
-                    user_states[chat_id] = ('storage', storage)
+                    # Если больше нет выданных предметов, завершаем возврат
+                    if selected_items:
+                        return_item(selected_items)
+                        bot.delete_message(chat_id, call.message.message_id)
+                        bot.send_message(chat_id, f"✅ Возвращено предметов: *{len(selected_items)}*",
+                                       parse_mode='Markdown', reply_markup=create_storage_keyboard())
+                        show_inventory(chat_id, storage)
+                        user_states[chat_id] = ('storage', storage)
+                    else:
+                        bot.delete_message(chat_id, call.message.message_id)
+                        bot.send_message(chat_id, "⚠️ Больше нет выданных предметов!", reply_markup=create_storage_keyboard())
+                        show_inventory(chat_id, storage)
+                        user_states[chat_id] = ('storage', storage)
                 return
-            # Поддержка возврата единственного предмета без множественного выбора
+            
+            # Прямой возврат предмета (без множественного выбора)
             if param:
                 return_item(param)
                 bot.delete_message(chat_id, call.message.message_id)
@@ -537,17 +563,39 @@ def handle_callback_query(call):
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_events_keyboard())
                 user_states[chat_id] = 'events'
                 return
+            
             events = get_events(param)
             if not events:
                 bot.delete_message(chat_id, call.message.message_id)
-                bot.send_message(chat_id, "📅 Нет событий за выбранный период!", reply_markup=create_events_keyboard())
+                
+                period_text = {
+                    'week': 'на неделю',
+                    'month': 'на месяц', 
+                    'all': 'вообще'
+                }.get(param, '')
+                
+                bot.send_message(chat_id, f"📅 Нет событий {period_text}!", reply_markup=create_events_keyboard())
                 user_states[chat_id] = 'events'
                 return
-            text = f"📅 *События ({param if param != 'all' else 'все'}):*\n\n"
-            for _, event_name, event_date in sorted(events, key=lambda x: x[2]):
-                text += f"📌 {event_name} - {event_date}\n"
-            bot.edit_message_text(text, chat_id, call.message.message_id, parse_mode='Markdown', 
-                                reply_markup=create_events_keyboard())
+            
+            # Форматируем текст для отображения
+            period_text = {
+                'week': 'на неделю',
+                'month': 'на месяц',
+                'all': 'все'
+            }.get(param, param)
+            
+            text = f"📅 *События ({period_text}):*\n\n"
+            for _, event_name, event_date in sorted(events, key=lambda x: x[2]):  # Сортируем по дате
+                # Преобразуем дату в более читаемый формат
+                try:
+                    date_obj = datetime.strptime(event_date, '%Y-%m-%d')
+                    formatted_date = date_obj.strftime('%d.%m.%Y')
+                    text += f"📌 *{event_name}* - {formatted_date}\n"
+                except ValueError:
+                    text += f"📌 *{event_name}* - {event_date} (некорректный формат)\n"
+            
+            bot.edit_message_text(text, chat_id, call.message.message_id, parse_mode='Markdown')
             user_states[chat_id] = 'events'
 
         elif action == 'delete_event':
