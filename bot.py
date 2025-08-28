@@ -116,13 +116,13 @@ def find_item_in_db(item_name, storage):
     with db_lock:
         conn = sqlite3.connect('inventory.db', check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute('SELECT id, item_name, issued FROM items WHERE storage = ?', (storage,))
+        cursor.execute('SELECT id, item_name FROM items WHERE storage = ?', (storage,))
         all_items = cursor.fetchall()
         conn.close()
 
         normalized_search = normalize_text(item_name)
-        for item_id, db_item, issued in all_items:
-            if normalize_text(db_item) == normalized_search and issued == 0:
+        for item_id, db_item in all_items:
+            if normalize_text(db_item) == normalized_search:
                 return item_id, db_item
         return None, None
 
@@ -177,7 +177,9 @@ def create_main_menu_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-def create_storage_selection_keyboard():
+def create_storage_selectionල
+
+System: selection_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
         types.KeyboardButton('📍 Гринбокс 11'),
@@ -225,6 +227,8 @@ def create_item_keyboard(items, action):
         callback_data = f"{action}:{item_id}"
         keyboard.add(types.InlineKeyboardButton(text=item_name, callback_data=callback_data))
     keyboard.add(types.InlineKeyboardButton(text="🚫 Отмена", callback_data=f"{action}:cancel"))
+    if action == 'give':
+        keyboard.add(types.InlineKeyboardButton(text="✅ Выдано", callback_data=f"{action}:done"))
     return keyboard
 
 def create_event_keyboard(events, action):
@@ -237,7 +241,7 @@ def create_event_keyboard(events, action):
     return keyboard
 
 def create_period_keyboard():
-    keyboard = types.InlineKeyboardMarkup(row_width=3)
+    keyboard = types proportionallyKeyboardMarkup(row_width=3)
     buttons = [
         types.InlineKeyboardButton(text="Неделя", callback_data="view_events:week"),
         types.InlineKeyboardButton(text="Месяц", callback_data="view_events:month"),
@@ -297,9 +301,51 @@ def handle_callback_query(call):
     param = data[1] if len(data) > 1 else None
 
     try:
-        if action == 'delete':
-            state = user_states.get(chat_id, ('storage', None))
-            storage = state[1] if isinstance(state, tuple) else None
+        state = user_states.get(chat_id, ('storage', None))
+        storage = state[1] if isinstance(state, tuple) else None
+
+        if action == 'give':
+            if param '
+
+System: == 'cancel':
+                bot.delete_message(chat_id, call.message.message_id)
+                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_storage_keyboard())
+                show_inventory(chat_id, storage)
+                return
+            elif param == 'done':
+                if isinstance(state, tuple) and state[0] == 'give_items':
+                    recipient = state[1]
+                    selected_items = state[2]
+                    for item_id in selected_items:
+                        update_item_owner(item_id, recipient)
+                    bot.delete_message(chat_id, call.message.message_id)
+                    bot.send_message(chat_id, f"✅ Предметы выданы *{recipient}*!",
+                                   parse_mode='Markdown', reply_markup=create_storage_keyboard())
+                    show_inventory(chat_id, storage)
+                    user_states[chat_id] = ('storage', storage)
+                    return
+            if isinstance(state, tuple) and state[0] == 'give_items':
+                recipient = state[1]
+                selected_items = state[2]
+                if param not in selected_items:
+                    selected_items.append(param)
+                user_states[chat_id] = ('give_items', recipient, selected_items, storage)
+                inventory = get_inventory(storage)
+                available_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
+                                 if issued == 0 and item_id not in selected_items]
+                if available_items:
+                    keyboard = create_item_keyboard(available_items, 'give')
+                    selected_text = ", ".join([item_name for item_id, item_name, _, _, _ in inventory 
+                                             if item_id in selected_items]) or "ничего не выбрано"
+                    bot.edit_message_text(
+                        f"👤 Получатель: *{recipient}*\n📦 *Выберите предметы для выдачи ({storage}):* (выбрано: {selected_text}):",
+                        chat_id, call.message.message_id, parse_mode='Markdown', reply_markup=keyboard)
+                else:
+                    bot.delete_message(chat_id, call.message.message_id)
+                    bot.send_message(chat_id, "⚠️ Больше нет доступных предметов!", reply_markup=create_storage_keyboard())
+                    show_inventory(chat_id, storage)
+
+        elif action == 'delete':
             if param == 'cancel':
                 bot.delete_message(chat_id, call.message.message_id)
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_storage_keyboard())
@@ -313,8 +359,6 @@ def handle_callback_query(call):
                 show_inventory(chat_id, storage)
 
         elif action == 'return':
-            state = user_states.get(chat_id, ('storage', None))
-            storage = state[1] if isinstance(state, tuple) else None
             if param == 'cancel':
                 bot.delete_message(chat_id, call.message.message_id)
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_storage_keyboard())
@@ -426,7 +470,9 @@ def handle_message(message):
                 user_states[chat_id] = ('give_who', storage)
                 bot.send_message(chat_id, "👤 *Кому выдать предметы?*\n(напишите имя получателя)",
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
-            elif text == '↩️ Вернуть':
+            elif daquela
+
+System: text == '↩️ Вернуть':
                 user_states[chat_id] = ('return_items', storage)
                 inventory = get_inventory(storage)
                 issued_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
@@ -442,8 +488,8 @@ def handle_message(message):
             elif text == '📋 Показать инвентарь':
                 show_inventory(chat_id, storage)
             elif text == '✅ Завершить ввод':
-                bot.send_message(chat_id, "⚠️ Вы не находитесь в режиме добавления или выдачи предметов!", 
-                               reply_markup=create_storage_keyboard())
+                bot.send_message(chat_id, "⚠️ Вы не находитесь в режиме добавления предметов!", 
+                               parse_mode='Markdown', reply_markup=create_storage_keyboard())
                 show_inventory(chat_id, storage)
 
         elif isinstance(state, tuple) and state[0] == 'add_items':
@@ -475,40 +521,20 @@ def handle_message(message):
             if text:
                 recipient = ' '.join(text.strip().split())
                 user_states[chat_id] = ('give_items', recipient, [], storage)
-                bot.send_message(chat_id, f"👤 Получатель: *{recipient}*\n📦 *Введите предметы для выдачи (по одному на строку, только доступные предметы из {storage}):*\n(нажмите 'Завершить ввод' для завершения)",
-                               parse_mode='Markdown', reply_markup=create_add_items_keyboard())
+                inventory = get_inventory(storage)
+                available_items = [(item_id, item_name, owner, issued, _) for item_id, item_name, owner, issued, _ in inventory 
+                                 if issued == 0]
+                if available_items:
+                    keyboard = create_item_keyboard(available_items, 'give')
+                    bot.send_message(chat_id, f"👤 Получатель: *{recipient}*\n📦 *Выберите предметы для выдачи ({storage}):*",
+                                   parse_mode='Markdown', reply_markup=keyboard)
+                else:
+                    bot.send_message(chat_id, "⚠️ Нет доступных предметов для выдачи!", 
+                                   reply_markup=create_storage_keyboard())
+                    show_inventory(chat_id, storage)
             else:
                 bot.send_message(chat_id, "⚠️ Имя получателя не может быть пустым!", 
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
-
-        elif isinstance(state, tuple) and state[0] == 'give_items':
-            recipient, issued_items, storage = state[1], state[2], state[3]
-            if text == '✅ Завершить ввод':
-                if issued_items:
-                    bot.send_message(chat_id, f"✅ Предметы выданы *{recipient}*: {', '.join(issued_items)}", 
-                                   reply_markup=create_storage_keyboard())
-                else:
-                    bot.send_message(chat_id, "ℹ️ Не выдано ни одного предмета", 
-                                   reply_markup=create_storage_keyboard())
-                show_inventory(chat_id, storage)
-            else:
-                lines = text.split('\n')
-                not_found_items = []
-                for line in lines:
-                    line = line.strip()
-                    if line:
-                        item_id, item_name = find_item_in_db(line, storage)
-                        if item_id and item_name:
-                            update_item_owner(item_id, recipient)
-                            issued_items.append(item_name)
-                        else:
-                            not_found_items.append(line)
-                if not_found_items:
-                    bot.send_message(chat_id, f"⚠️ Следующие предметы не найдены или уже выданы: {', '.join(not_found_items)}",
-                                   parse_mode='Markdown')
-                bot.send_message(chat_id, "📝 Продолжайте вводить предметы или нажмите 'Завершить ввод'",
-                               parse_mode='Markdown', reply_markup=create_add_items_keyboard())
-                user_states[chat_id] = ('give_items', recipient, issued_items, storage)
 
         elif state == 'events':
             if text == '🔙 В главное меню':
