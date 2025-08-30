@@ -31,6 +31,11 @@ MONTHS = {
     'июля': 7, 'августа': 8, 'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
 }
 
+MONTHS_RU = {
+    1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня',
+    7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
+}
+
 # Сопоставление хранилищ и их коротких идентификаторов
 STORAGE_IDS = {
     'Гринбокс 11': 'gb11',
@@ -265,7 +270,7 @@ def delete_event(event_ids):
             for event_id, event_name, event_date in events_to_delete:
                 try:
                     date_obj = datetime.strptime(event_date, '%Y-%m-%d')
-                    formatted_date = date_obj.strftime('%d.%m.%Y')
+                    formatted_date = date_obj.strftime('%d %B %Y').replace(date_obj.strftime('%B'), MONTHS_RU[date_obj.month])
                     deleted_events.append(f"{event_name} ({formatted_date})")
                 except ValueError:
                     deleted_events.append(f"{event_name} ({event_date})")
@@ -361,10 +366,10 @@ def create_events_delete_keyboard(chat_id):
         logging.info(f"No events found for deletion by chat_id={chat_id}")
         return None
     buttons = []
-    for event_id, event_name, event_date in sorted(events, key=lambda x: x[1]):
+    for event_id, event_name, event_date in sorted(events, key=lambda x: x[2]):
         try:
             date_obj = datetime.strptime(event_date, '%Y-%m-%d')
-            formatted_date = date_obj.strftime('%d.%m.%Y')
+            formatted_date = date_obj.strftime('%d %B %Y').replace(date_obj.strftime('%B'), MONTHS_RU[date_obj.month])
             display_name = f"{event_name} ({formatted_date})"[:30] + '...' if len(f"{event_name} ({formatted_date})") > 30 else f"{event_name} ({formatted_date})"
         except ValueError:
             display_name = f"{event_name} ({event_date})"[:30] + '...' if len(f"{event_name} ({event_date})") > 30 else f"{event_name} ({event_date})"
@@ -536,7 +541,7 @@ def handle_events_actions(message):
         for _, event_name, event_date in sorted(events, key=lambda x: x[2]):
             try:
                 date_obj = datetime.strptime(event_date, '%Y-%m-%d')
-                formatted_date = date_obj.strftime('%d.%m.%Y')
+                formatted_date = date_obj.strftime('%d %B %Y').replace(date_obj.strftime('%B'), MONTHS_RU[date_obj.month])
                 text += f"• {event_name} - {formatted_date}\n"
             except ValueError:
                 text += f"• {event_name} - {event_date}\n"
@@ -577,7 +582,7 @@ def handle_adding_event_date(message):
         
         event_id = add_event(event_name, event_date)
         if event_id:
-            formatted_date = date_obj.strftime('%d.%m.%Y')
+            formatted_date = date_obj.strftime('%d %B %Y').replace(date_obj.strftime('%B'), MONTHS_RU[date_obj.month])
             bot.send_message(chat_id, f"✅ Событие '{event_name}' на {formatted_date} добавлено")
         else:
             bot.send_message(chat_id, "❌ Ошибка при добавлении события")
@@ -725,6 +730,7 @@ def handle_callback(call):
         
         # Очищаем выбор и показываем меню событий
         user_selections.pop(chat_id, None)
+        user_states[chat_id] = 'events_menu'
         show_events_menu(chat_id)
     
     elif callback_data.startswith('clear_'):
