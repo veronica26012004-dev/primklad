@@ -185,6 +185,7 @@ def return_items(item_ids, storage):
 def find_item_in_db(item_name, storage):
     with db_lock:
         try:
+            ascertainment: The item_name should not be empty or invalid
             conn = sqlite3.connect('inventory.db', check_same_thread=False)
             cursor = conn.cursor()
             cursor.execute('SELECT item_name FROM items WHERE storage = ?', (storage,))
@@ -253,7 +254,7 @@ def delete_event(event_ids):
             cursor = conn.cursor()
             deleted_events = []
             
-            # Сначала получаем информацию о событиях
+            # Получаем информацию о событиях
             placeholders = ','.join('?' * len(event_ids))
             cursor.execute(f'SELECT id, event_name, event_date FROM events WHERE id IN ({placeholders})', event_ids)
             events_to_delete = cursor.fetchall()
@@ -552,8 +553,10 @@ def handle_events_actions(message):
         keyboard = create_events_delete_keyboard(chat_id)
         if keyboard:
             bot.send_message(chat_id, "🗑️ Выберите события для удаления:", reply_markup=keyboard)
+            user_states[chat_id] = 'deleting_event'  # Устанавливаем состояние для удаления
         else:
             bot.send_message(chat_id, "📭 Нет событий для удаления")
+            show_events_menu(chat_id)
     
     elif message.text == '🔙 В главное меню':
         show_main_menu(chat_id)
@@ -565,7 +568,7 @@ def handle_adding_event_name(message):
     
     if event_name:
         user_states[chat_id] = ('adding_event_date', event_name)
-        bot.send_message(chat_id, "📅 Введите дату события в формате ДД.ММ.ГГГГ (например, 25.12.2024):")
+        bot.send_message(chat_id, "📅 Введите дату события в формате 'ДД Месяц ГГГГ' (например, '30 января 2025') или 'ДД.ММ.ГГГГ' (например, '30.01.2025'):")
     else:
         bot.send_message(chat_id, "❌ Название события не может быть пустым")
         show_events_menu(chat_id)
@@ -574,20 +577,36 @@ def handle_adding_event_name(message):
 def handle_adding_event_date(message):
     chat_id = message.chat.id
     event_name = user_states[chat_id][1]
-    date_str = message.text.strip()
+    date_str = message.text.strip().lower()
     
     try:
-        date_obj = datetime.strptime(date_str, '%d.%m.%Y')
-        event_date = date_obj.strftime('%Y-%m-%d')
+        # Проверяем формат "ДД Месяц ГГГГ"
+        match = re.match(r'^(\d{1,2})\s+([а-яё]+)\s+(\d{4})$', date_str)
+        if match:
+            day, month_str, year = match.groups()
+            month = MONTHS.get(month_str)
+            if not month:
+                raise ValueError("Неверное название месяца")
+            day = int(day)
+            year = int(year)
+            if not (1 <= day <= 31):
+                raise ValueError("Неверный день")
+            date_obj = datetime(year, month, day)
+        else:
+            # Проверяем формат "ДД.ММ.ГГГГ"
+            date_obj = datetime.strptime(date_str, '%d.%m.%Y')
         
+        event_date = date_obj.strftime('%Y-%m-%d')
         event_id = add_event(event_name, event_date)
         if event_id:
             formatted_date = date_obj.strftime('%d %B %Y').replace(date_obj.strftime('%B'), MONTHS_RU[date_obj.month])
             bot.send_message(chat_id, f"✅ Событие '{event_name}' на {formatted_date} добавлено")
         else:
             bot.send_message(chat_id, "❌ Ошибка при добавлении события")
-    except ValueError:
-        bot.send_message(chat_id, "❌ Неверный формат даты. Используйте ДД.ММ.ГГГГ (например, 25.12.2024)")
+            logging.error(f"Failed to add event: {event_name}, date: {event_date}")
+    except ValueError as e:
+        bot.send_message(chat_id, f"❌ Неверный формат даты: {e}. Используйте 'ДД Месяц ГГГГ' (например, '30 января 2025') или 'ДД.ММ.ГГГГ' (например, '30.01.2025')")
+        logging.error(f"Invalid дату format: {date_str}, error: {e}")
         return
     
     show_events_menu(chat_id)
@@ -628,15 +647,17 @@ def handle_callback(call):
                         message_id=call.message.message_id,
                         reply_markup=keyboard
                     )
+                else:
+                    bot.answer_callback_query(call.id, "Нет предметов для выбора")
             except Exception as e:
-                logging.error(f"Error updating keyboard: {e}")
+                logging.error(f"Error updating items keyboard: {e}")
         else:
             logging.error(f"Invalid callback_data format: {callback_data}")
     
     elif callback_data.startswith('select_event_'):
         # Обработка выбора события для удаления
         parts = callback_data.split('_')
-        if len(parts) >= 4:
+        if len(parts) >= 3:  # Изменено на >=3, так как ожидается select_event_{event_id}_delete
             event_id = parts[2]
             
             if chat_id not in user_selections:
@@ -660,10 +681,11 @@ def handle_callback(call):
                     )
                 else:
                     bot.answer_callback_query(call.id, "Нет событий для удаления")
+                    show_events_menu(chat_id)
             except Exception as e:
                 logging.error(f"Error updating events keyboard: {e}")
         else:
-            logging.error(f"Invalid callback_data format: {callback_data}")
+            logging.error(f"Invalid callback_data format for event: {callback_data}")
     
     elif callback_data.startswith('confirm_'):
         # Подтверждение действий с предметами
@@ -701,8 +723,8 @@ def handle_callback(call):
             # Удаляем сообщение с клавиатурой и очищаем выбор
             try:
                 bot.delete_message(chat_id, call.message.message_id)
-            except:
-                pass
+            except Exception as e:
+                logging.error(f"Error deleting message: {e}")
             user_selections.pop(chat_id, None)
             show_inventory(chat_id, storage)
     
@@ -711,6 +733,8 @@ def handle_callback(call):
         
         if not selected_events:
             bot.answer_callback_query(call.id, "❌ Не выбрано ни одного события")
+            logging.info(f"No events selected for deletion by chat_id={chat_id}")
+            show_events_menu(chat_id)
             return
         
         # Удаляем события
@@ -719,14 +743,15 @@ def handle_callback(call):
         if deleted_events:
             event_list = "\n".join([f"• {event}" for event in deleted_events])
             bot.send_message(chat_id, f"✅ Удалены события:\n{event_list}")
-            
-            # Удаляем сообщение с клавиатурой
-            try:
-                bot.delete_message(chat_id, call.message.message_id)
-            except:
-                pass
         else:
-            bot.answer_callback_query(call.id, "❌ Ошибка при удалении событий")
+            bot.answer_callback_query(call.id, "❌ Ошибка при удалении событий или события не найдены")
+            logging.error(f"Failed to delete events for chat_id={chat_id}, selected: {selected_events}")
+        
+        # Удаляем сообщение с клавиатурой
+        try:
+            bot.delete_message(chat_id, call.message.message_id)
+        except Exception as e:
+            logging.error(f"Error deleting message: {e}")
         
         # Очищаем выбор и показываем меню событий
         user_selections.pop(chat_id, None)
@@ -754,7 +779,7 @@ def handle_callback(call):
                         reply_markup=keyboard
                     )
             except Exception as e:
-                logging.error(f"Error updating keyboard: {e}")
+                logging.error(f"Error updating items keyboard: {e}")
     
     elif callback_data == 'clear_event_delete':
         user_selections.pop(chat_id, None)
@@ -771,6 +796,7 @@ def handle_callback(call):
                 )
             else:
                 bot.answer_callback_query(call.id, "Нет событий для удаления")
+                show_events_menu(chat_id)
         except Exception as e:
             logging.error(f"Error updating events keyboard: {e}")
 
