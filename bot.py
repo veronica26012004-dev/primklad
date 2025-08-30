@@ -246,14 +246,21 @@ def delete_event(event_ids):
                 cursor.execute('SELECT event_name, event_date FROM events WHERE id = ?', (event_id,))
                 event = cursor.fetchone()
                 if event:
+                    event_name, event_date = event
                     cursor.execute('DELETE FROM events WHERE id = ?', (event_id,))
-                    deleted_names.append(f"{event[0]} ({event[1]})")
+                    try:
+                        date_obj = datetime.strptime(event_date, '%Y-%m-%d')
+                        formatted_date = date_obj.strftime('%d.%m.%Y')
+                        deleted_names.append(f"{event_name} ({formatted_date})")
+                    except ValueError:
+                        deleted_names.append(f"{event_name} ({event_date})")
             conn.commit()
             logging.info(f"Deleted events: {deleted_names}")
             conn.close()
             return deleted_names
         except Exception as e:
             logging.error(f"Error deleting events: {e}")
+            conn.close()
             return []
 
 # Клавиатуры
@@ -345,8 +352,11 @@ def create_events_delete_keyboard(chat_id):
         buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=callback_data))
     selected = user_selections.get(chat_id, [])
     if selected:
-        buttons.append(types.InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_event_delete"))
-        buttons.append(types.InlineKeyboardButton(text="🗑️ Очистить выбор", callback_data="clear_event_delete"))
+        confirm_data = "confirm_event_delete"
+        clear_data = "clear_event_delete"
+        if len(confirm_data.encode('utf-8')) <= 64 and len(clear_data.encode('utf-8')) <= 64:
+            buttons.append(types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=confirm_data))
+            buttons.append(types.InlineKeyboardButton(text="🗑️ Очистить выбор", callback_data=clear_data))
     keyboard.add(*buttons)
     return keyboard if buttons else None
 
@@ -578,9 +588,10 @@ def handle_message(message):
             show_inventory(chat_id, state[1])
         elif state == 'storage_selection':
             show_storage_selection(chat_id)
-        elif state == 'events':
+        elif state in ('events', 'delete_event_select'):
             bot.send_message(chat_id, "📅 *События*\n\nВыберите действие:", 
                             parse_mode='Markdown', reply_markup=create_events_keyboard())
+            user_states[chat_id] = 'events'
         else:
             show_main_menu(chat_id)
 
@@ -665,7 +676,7 @@ def handle_callback_query(call):
             )
             bot.answer_callback_query(call.id, "Выбор очищен")
 
-        elif action == 'select' and parts[1] == 'event' and len(parts) == 3:
+        elif action == 'select' and parts[1] == 'event' and len(parts) == 4:
             event_id, main_action = parts[2], parts[3]
             if chat_id not in user_selections:
                 user_selections[chat_id] = []
@@ -694,11 +705,13 @@ def handle_callback_query(call):
 
         elif action == 'confirm' and parts[1] == 'event' and parts[2] == 'delete':
             selected = user_selections.get(chat_id, [])
+            logging.info(f"Confirming deletion of events: {selected}")
             if not selected:
                 bot.answer_callback_query(call.id, "⚠️ Не выбрано ни одного события!")
                 return
             deleted = delete_event(selected)
-            response = f"✅ Удалены события: {', '.join(deleted)}" if deleted else "⚠️ Ничего не удалено"
+            response = f"✅ Удалены события: {', '.join(deleted)}" if deleted else "⚠️ Ничего не удалено, возможно, события уже удалены"
+            logging.info(f"Deletion result: {response}")
             bot.edit_message_text(response, chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
             user_selections.pop(chat_id, None)
             user_states[chat_id] = 'events'
