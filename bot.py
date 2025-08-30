@@ -383,6 +383,9 @@ def handle_message(message):
                 show_inventory(chat_id, storage)
             elif text:
                 items = [item.strip() for item in text.split('\n') if item.strip()]
+                if not items:
+                    bot.send_message(chat_id, "⚠️ Введите хотя бы один предмет!", parse_mode='Markdown')
+                    return
                 added_items = []
                 existing_items = []
                 for item_name in items:
@@ -405,17 +408,19 @@ def handle_message(message):
             if normalize_text(text) == 'стоп':
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_storage_keyboard())
                 show_inventory(chat_id, storage)
-            elif text:
+            elif text.strip():
                 recipient = ' '.join(text.strip().split())
+                user_states[chat_id] = ('give_items', recipient, storage)
                 keyboard = create_items_keyboard(storage, 'give')
                 if keyboard:
-                    user_states[chat_id] = ('give_items', recipient, storage)
                     bot.send_message(chat_id, f"👤 Получатель: *{recipient}*\n📦 *Выберите предмет для выдачи:*",
                                    parse_mode='Markdown', reply_markup=keyboard)
                 else:
                     bot.send_message(chat_id, "📭 Нет доступных предметов для выдачи!", 
                                    parse_mode='Markdown', reply_markup=create_storage_keyboard())
                     show_inventory(chat_id, storage)
+            else:
+                bot.send_message(chat_id, "⚠️ Имя получателя не может быть пустым!", parse_mode='Markdown')
 
         elif state == 'events':
             if text == '🔙 В главное меню':
@@ -540,22 +545,36 @@ def handle_callback_query(call):
             state = user_states.get(chat_id)
             if isinstance(state, tuple) and state[0] == 'give_items':
                 recipient = state[1]
-                update_item_owner(item_name, recipient, storage)
-                bot.answer_callback_query(call.id)
-                bot.edit_message_text(f"✅ *{item_name}* выдан *{recipient}*!", 
-                                    chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
-                show_inventory(chat_id, storage)
+                inventory = get_inventory(storage)
+                for _, db_item, owner, issued, _ in inventory:
+                    if db_item == item_name and owner is None and issued == 0:
+                        update_item_owner(item_name, recipient, storage)
+                        bot.answer_callback_query(call.id)
+                        bot.edit_message_text(f"✅ *{item_name}* выдан *{recipient}*!", 
+                                            chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
+                        show_inventory(chat_id, storage)
+                        break
+                else:
+                    bot.answer_callback_query(call.id, "⚠️ Предмет уже выдан или недоступен!")
+                    show_inventory(chat_id, storage)
             else:
                 bot.answer_callback_query(call.id, "⚠️ Ошибка: выберите получателя заново.")
                 show_inventory(chat_id, storage)
 
         elif data.startswith('return_'):
             _, item_name, storage = data.split('_', 2)
-            return_item(item_name, storage)
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(f"✅ *{item_name}* возвращен в инвентарь!", 
-                                chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
-            show_inventory(chat_id, storage)
+            inventory = get_inventory(storage)
+            for _, db_item, _, issued, _ in inventory:
+                if db_item == item_name and issued == 1:
+                    return_item(item_name, storage)
+                    bot.answer_callback_query(call.id)
+                    bot.edit_message_text(f"✅ *{item_name}* возвращен в инвентарь!", 
+                                        chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
+                    show_inventory(chat_id, storage)
+                    break
+            else:
+                bot.answer_callback_query(call.id, "⚠️ Предмет не выдан или недоступен!")
+                show_inventory(chat_id, storage)
 
     except Exception as e:
         logging.error(f"Error processing callback query from {chat_id}: {e}")
