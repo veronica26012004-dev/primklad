@@ -293,11 +293,11 @@ def create_items_keyboard(chat_id, storage, action):
         # Ограничиваем длину item_name для отображения
         display_name = item_name[:30] + '...' if len(item_name) > 30 else item_name
         if action == 'delete':
-            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}"))
+            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}_{storage}"))
         elif action == 'give' and owner is None and issued == 0:
-            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}"))
+            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}_{storage}"))
         elif action == 'return' and issued == 1:
-            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}"))
+            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}_{storage}"))
     # Добавляем кнопки управления
     selected = user_selections.get(chat_id, [])
     if selected:
@@ -579,12 +579,20 @@ def handle_callback_query(call):
     try:
         parts = data.split('_')
         if len(parts) < 3:
+            logging.error(f"Invalid callback_data format: {data}")
             bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
             return
+
         action = parts[0]
-        item_id = parts[1] if action == 'select' else None
-        main_action = parts[2] if action in ('confirm', 'clear') else parts[2]
-        storage = parts[3] if action in ('confirm', 'clear') else parts[3]
+        if action == 'select' and len(parts) == 4:
+            item_id, main_action, storage = parts[1], parts[2], parts[3]
+        elif action in ('confirm', 'clear') and len(parts) == 3:
+            main_action, storage = parts[1], parts[2]
+            item_id = None
+        else:
+            logging.error(f"Unexpected callback_data structure: {data}")
+            bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
+            return
 
         if action == 'select':
             if chat_id not in user_selections:
