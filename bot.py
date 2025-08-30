@@ -31,6 +31,13 @@ MONTHS = {
     'июля': 7, 'августа': 8, 'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
 }
 
+# Сопоставление хранилищ и их коротких идентификаторов
+STORAGE_IDS = {
+    'Гринбокс 11': 'gb11',
+    'Гринбокс 12': 'gb12'
+}
+REVERSE_STORAGE_IDS = {v: k for k, v in STORAGE_IDS.items()}
+
 # Инициализация базы данных
 def init_database():
     with db_lock:
@@ -289,20 +296,29 @@ def create_items_keyboard(chat_id, storage, action):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     items = get_inventory(storage)
     buttons = []
+    storage_id = STORAGE_IDS.get(storage, 'unknown')
     for item_id, item_name, owner, issued, _ in sorted(items, key=lambda x: x[1]):
         # Ограничиваем длину item_name для отображения
         display_name = item_name[:30] + '...' if len(item_name) > 30 else item_name
+        callback_data = f"select_{item_id}_{action}_{storage_id}"
+        # Проверка длины callback_data
+        if len(callback_data.encode('utf-8')) > 64:
+            logging.warning(f"Callback data too long for item {item_name}: {callback_data}")
+            continue
         if action == 'delete':
-            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}_{storage}"))
+            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=callback_data))
         elif action == 'give' and owner is None and issued == 0:
-            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}_{storage}"))
+            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=callback_data))
         elif action == 'return' and issued == 1:
-            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=f"select_{item_id}_{action}_{storage}"))
+            buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=callback_data))
     # Добавляем кнопки управления
     selected = user_selections.get(chat_id, [])
     if selected:
-        buttons.append(types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_{action}_{storage}"))
-        buttons.append(types.InlineKeyboardButton(text="🗑️ Очистить выбор", callback_data=f"clear_{action}_{storage}"))
+        confirm_data = f"confirm_{action}_{storage_id}"
+        clear_data = f"clear_{action}_{storage_id}"
+        if len(confirm_data.encode('utf-8')) <= 64 and len(clear_data.encode('utf-8')) <= 64:
+            buttons.append(types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=confirm_data))
+            buttons.append(types.InlineKeyboardButton(text="🗑️ Очистить выбор", callback_data=clear_data))
     keyboard.add(*buttons)
     return keyboard if buttons else None
 
@@ -585,9 +601,11 @@ def handle_callback_query(call):
 
         action = parts[0]
         if action == 'select' and len(parts) == 4:
-            item_id, main_action, storage = parts[1], parts[2], parts[3]
+            item_id, main_action, storage_id = parts[1], parts[2], parts[3]
+            storage = REVERSE_STORAGE_IDS.get(storage_id, storage_id)
         elif action in ('confirm', 'clear') and len(parts) == 3:
-            main_action, storage = parts[1], parts[2]
+            main_action, storage_id = parts[1], parts[2]
+            storage = REVERSE_STORAGE_IDS.get(storage_id, storage_id)
             item_id = None
         else:
             logging.error(f"Unexpected callback_data structure: {data}")
@@ -656,7 +674,7 @@ def handle_callback_query(call):
             bot.answer_callback_query(call.id, "Выбор очищен")
 
     except Exception as e:
-        logging.error(f"Error processing callback query from {chat_id}: {e}")
+        logging.error(f"Error processing callback query from {chat_id}: {e}, callback_data: {data}")
         bot.answer_callback_query(call.id, f"⚠️ Ошибка: {str(e)}")
         state = user_states.get(chat_id)
         if isinstance(state, tuple) and state[0] == 'storage':
