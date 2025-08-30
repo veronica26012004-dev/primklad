@@ -69,9 +69,9 @@ def init_database():
 
 init_database()
 
-# Состояния пользователей и выбор предметов
+# Состояния пользователей и выбор предметов/событий
 user_states = {}
-user_selections = {}  # Хранит выбранные id предметов для каждого chat_id
+user_selections = {}  # Хранит выбранные id предметов или событий для каждого chat_id
 
 # Функция для нормализации текста
 def normalize_text(text):
@@ -204,7 +204,7 @@ def add_event(event_name, event_date):
             cursor.execute('INSERT INTO events (id, event_name, event_date) VALUES (?, ?, ?)',
                           (event_id, event_name, event_date))
             conn.commit()
-            logging.info(f"Added event: {event_name}, date: {event_date}")
+            logging.info(f"Added event: {event_name}, date: {event_date}, id: {event_id}")
             conn.close()
             return event_id
         except Exception as e:
@@ -220,14 +220,14 @@ def get_events(period=None):
             current_date = datetime.now().strftime('%Y-%m-%d')
             if period == 'week':
                 end_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-                cursor.execute('SELECT event_name, event_date FROM events WHERE event_date BETWEEN ? AND ? ORDER BY event_date', 
+                cursor.execute('SELECT id, event_name, event_date FROM events WHERE event_date BETWEEN ? AND ? ORDER BY event_date', 
                               (current_date, end_date))
             elif period == 'month':
                 end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-                cursor.execute('SELECT event_name, event_date FROM events WHERE event_date BETWEEN ? AND ? ORDER BY event_date', 
+                cursor.execute('SELECT id, event_name, event_date FROM events WHERE event_date BETWEEN ? AND ? ORDER BY event_date', 
                               (current_date, end_date))
             else:
-                cursor.execute('SELECT event_name, event_date FROM events ORDER BY event_date')
+                cursor.execute('SELECT id, event_name, event_date FROM events ORDER BY event_date')
             events = cursor.fetchall()
             logging.info(f"Fetched {len(events)} events for period '{period}'")
             conn.close()
@@ -236,17 +236,25 @@ def get_events(period=None):
             logging.error(f"Error fetching events: {e}")
             return []
 
-def delete_event(event_name, event_date):
+def delete_event(event_ids):
     with db_lock:
         try:
             conn = sqlite3.connect('inventory.db', check_same_thread=False)
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM events WHERE event_name = ? AND event_date = ?', (event_name, event_date))
+            deleted_names = []
+            for event_id in event_ids:
+                cursor.execute('SELECT event_name, event_date FROM events WHERE id = ?', (event_id,))
+                event = cursor.fetchone()
+                if event:
+                    cursor.execute('DELETE FROM events WHERE id = ?', (event_id,))
+                    deleted_names.append(f"{event[0]} ({event[1]})")
             conn.commit()
-            logging.info(f"Deleted event: {event_name}, {event_date}")
+            logging.info(f"Deleted events: {deleted_names}")
             conn.close()
+            return deleted_names
         except Exception as e:
-            logging.error(f"Error deleting event {event_name}: {e}")
+            logging.error(f"Error deleting events: {e}")
+            return []
 
 # Клавиатуры
 def create_main_menu_keyboard():
@@ -298,10 +306,8 @@ def create_items_keyboard(chat_id, storage, action):
     buttons = []
     storage_id = STORAGE_IDS.get(storage, 'unknown')
     for item_id, item_name, owner, issued, _ in sorted(items, key=lambda x: x[1]):
-        # Ограничиваем длину item_name для отображения
         display_name = item_name[:30] + '...' if len(item_name) > 30 else item_name
         callback_data = f"select_{item_id}_{action}_{storage_id}"
-        # Проверка длины callback_data
         if len(callback_data.encode('utf-8')) > 64:
             logging.warning(f"Callback data too long for item {item_name}: {callback_data}")
             continue
@@ -311,7 +317,6 @@ def create_items_keyboard(chat_id, storage, action):
             buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=callback_data))
         elif action == 'return' and issued == 1:
             buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=callback_data))
-    # Добавляем кнопки управления
     selected = user_selections.get(chat_id, [])
     if selected:
         confirm_data = f"confirm_{action}_{storage_id}"
@@ -319,6 +324,29 @@ def create_items_keyboard(chat_id, storage, action):
         if len(confirm_data.encode('utf-8')) <= 64 and len(clear_data.encode('utf-8')) <= 64:
             buttons.append(types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=confirm_data))
             buttons.append(types.InlineKeyboardButton(text="🗑️ Очистить выбор", callback_data=clear_data))
+    keyboard.add(*buttons)
+    return keyboard if buttons else None
+
+def create_events_delete_keyboard(chat_id):
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    events = get_events()
+    buttons = []
+    for event_id, event_name, event_date in sorted(events, key=lambda x: x[1]):
+        try:
+            date_obj = datetime.strptime(event_date, '%Y-%m-%d')
+            formatted_date = date_obj.strftime('%d.%m.%Y')
+            display_name = f"{event_name} ({formatted_date})"[:30] + '...' if len(f"{event_name} ({formatted_date})") > 30 else f"{event_name} ({formatted_date})"
+        except ValueError:
+            display_name = f"{event_name} ({event_date})"[:30] + '...' if len(f"{event_name} ({event_date})") > 30 else f"{event_name} ({event_date})"
+        callback_data = f"select_event_{event_id}_delete"
+        if len(callback_data.encode('utf-8')) > 64:
+            logging.warning(f"Callback data too long for event {event_name}: {callback_data}")
+            continue
+        buttons.append(types.InlineKeyboardButton(text=display_name, callback_data=callback_data))
+    selected = user_selections.get(chat_id, [])
+    if selected:
+        buttons.append(types.InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_event_delete"))
+        buttons.append(types.InlineKeyboardButton(text="🗑️ Очистить выбор", callback_data="clear_event_delete"))
     keyboard.add(*buttons)
     return keyboard if buttons else None
 
@@ -488,7 +516,7 @@ def handle_message(message):
                     bot.send_message(chat_id, "📅 Нет событий!", reply_markup=create_events_keyboard())
                 else:
                     text = "📅 *События:*\n\n"
-                    for event_name, event_date in events:
+                    for _, event_name, event_date in events:
                         try:
                             date_obj = datetime.strptime(event_date, '%Y-%m-%d')
                             formatted_date = date_obj.strftime('%d.%m.%Y')
@@ -497,9 +525,15 @@ def handle_message(message):
                             text += f"📌 *{event_name}* - {event_date} (некорректный формат)\n"
                     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_events_keyboard())
             elif text == '🗑️ Удалить событие':
-                user_states[chat_id] = 'delete_event'
-                bot.send_message(chat_id, "🗑️ *Введите название события для удаления:*\n(напишите 'стоп' для выхода)",
-                               parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
+                user_states[chat_id] = 'delete_event_select'
+                keyboard = create_events_delete_keyboard(chat_id)
+                if keyboard:
+                    bot.send_message(chat_id, "🗑️ *Выберите события для удаления (нажимайте на кнопки, затем 'Подтвердить'):*",
+                                   parse_mode='Markdown', reply_markup=keyboard)
+                else:
+                    bot.send_message(chat_id, "📅 Нет событий для удаления!", 
+                                   parse_mode='Markdown', reply_markup=create_events_keyboard())
+                    user_states[chat_id] = 'events'
 
         elif state == 'add_event_name':
             if text and text.strip():
@@ -536,41 +570,6 @@ def handle_message(message):
                     bot.send_message(chat_id, f"⚠️ Неверный формат даты! Используйте 'ДД месяц ГГГГ' (например, 15 января 2025): {str(e)}", 
                                    parse_mode='Markdown')
 
-        elif state == 'delete_event':
-            if normalize_text(text) == 'стоп':
-                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_events_keyboard())
-                user_states[chat_id] = 'events'
-            elif text:
-                user_states[chat_id] = ('delete_event_date', text)
-                bot.send_message(chat_id, "📅 *Введите дату события (например, 15 января 2025):*", 
-                               parse_mode='Markdown')
-
-        elif isinstance(state, tuple) and state[0] == 'delete_event_date':
-            event_name = state[1]
-            if normalize_text(text) == 'стоп':
-                bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_events_keyboard())
-                user_states[chat_id] = 'events'
-            else:
-                try:
-                    parts = text.strip().split()
-                    if len(parts) != 3:
-                        raise ValueError("Неверный формат даты")
-                    day, month_str, year = parts
-                    day = int(day)
-                    month = MONTHS.get(month_str.lower())
-                    if not month:
-                        raise ValueError("Неверное название месяца")
-                    year = int(year)
-                    event_date = f"{year}-{month:02d}-{day:02d}"
-                    datetime.strptime(event_date, '%Y-%m-%d')
-                    delete_event(event_name, event_date)
-                    bot.send_message(chat_id, f"✅ Событие *{event_name}* на {event_date} удалено!", 
-                                   parse_mode='Markdown', reply_markup=create_events_keyboard())
-                    user_states[chat_id] = 'events'
-                except ValueError as e:
-                    bot.send_message(chat_id, f"⚠️ Неверный формат даты! Используйте 'ДД месяц ГГГГ' (например, 15 января 2025): {str(e)}", 
-                                   parse_mode='Markdown')
-
     except Exception as e:
         logging.error(f"Error processing message from {chat_id}: {e}")
         bot.send_message(chat_id, f"⚠️ Произошла ошибка: {str(e)}. Пожалуйста, попробуйте снова.", 
@@ -594,7 +593,7 @@ def handle_callback_query(call):
 
     try:
         parts = data.split('_')
-        if len(parts) < 3:
+        if len(parts) < 2:
             logging.error(f"Invalid callback_data format: {data}")
             bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
             return
@@ -603,16 +602,6 @@ def handle_callback_query(call):
         if action == 'select' and len(parts) == 4:
             item_id, main_action, storage_id = parts[1], parts[2], parts[3]
             storage = REVERSE_STORAGE_IDS.get(storage_id, storage_id)
-        elif action in ('confirm', 'clear') and len(parts) == 3:
-            main_action, storage_id = parts[1], parts[2]
-            storage = REVERSE_STORAGE_IDS.get(storage_id, storage_id)
-            item_id = None
-        else:
-            logging.error(f"Unexpected callback_data structure: {data}")
-            bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
-            return
-
-        if action == 'select':
             if chat_id not in user_selections:
                 user_selections[chat_id] = []
             if item_id not in user_selections[chat_id]:
@@ -621,7 +610,6 @@ def handle_callback_query(call):
             else:
                 user_selections[chat_id].remove(item_id)
                 bot.answer_callback_query(call.id, "Предмет убран из выбора")
-            # Обновляем клавиатуру
             keyboard = create_items_keyboard(chat_id, storage, main_action)
             selected_items = []
             for selected_id in user_selections.get(chat_id, []):
@@ -634,7 +622,9 @@ def handle_callback_query(call):
                 chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=keyboard
             )
 
-        elif action == 'confirm':
+        elif action == 'confirm' and len(parts) == 3:
+            main_action, storage_id = parts[1], parts[2]
+            storage = REVERSE_STORAGE_IDS.get(storage_id, storage_id)
             selected = user_selections.get(chat_id, [])
             if not selected:
                 bot.answer_callback_query(call.id, "⚠️ Не выбрано ни одного предмета!")
@@ -664,7 +654,9 @@ def handle_callback_query(call):
                 user_selections.pop(chat_id, None)
                 show_inventory(chat_id, storage)
 
-        elif action == 'clear':
+        elif action == 'clear' and len(parts) == 3:
+            main_action, storage_id = parts[1], parts[2]
+            storage = REVERSE_STORAGE_IDS.get(storage_id, storage_id)
             user_selections.pop(chat_id, None)
             keyboard = create_items_keyboard(chat_id, storage, main_action)
             bot.edit_message_text(
@@ -672,6 +664,59 @@ def handle_callback_query(call):
                 chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=keyboard
             )
             bot.answer_callback_query(call.id, "Выбор очищен")
+
+        elif action == 'select' and parts[1] == 'event' and len(parts) == 3:
+            event_id, main_action = parts[2], parts[3]
+            if chat_id not in user_selections:
+                user_selections[chat_id] = []
+            if event_id not in user_selections[chat_id]:
+                user_selections[chat_id].append(event_id)
+                bot.answer_callback_query(call.id, "Событие добавлено в выбор")
+            else:
+                user_selections[chat_id].remove(event_id)
+                bot.answer_callback_query(call.id, "Событие убрано из выбора")
+            keyboard = create_events_delete_keyboard(chat_id)
+            selected_events = []
+            for selected_id in user_selections.get(chat_id, []):
+                for event in get_events():
+                    if event[0] == selected_id:
+                        try:
+                            date_obj = datetime.strptime(event[2], '%Y-%m-%d')
+                            formatted_date = date_obj.strftime('%d.%m.%Y')
+                            selected_events.append(f"{event[1]} ({formatted_date})")
+                        except ValueError:
+                            selected_events.append(f"{event[1]} ({event[2]})")
+            selected_text = f"\nВыбрано: {', '.join(selected_events)}" if selected_events else ""
+            bot.edit_message_text(
+                f"🗑️ *Выберите события для удаления (нажимайте на кнопки, затем 'Подтвердить'):*{selected_text}",
+                chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=keyboard
+            )
+
+        elif action == 'confirm' and parts[1] == 'event' and parts[2] == 'delete':
+            selected = user_selections.get(chat_id, [])
+            if not selected:
+                bot.answer_callback_query(call.id, "⚠️ Не выбрано ни одного события!")
+                return
+            deleted = delete_event(selected)
+            response = f"✅ Удалены события: {', '.join(deleted)}" if deleted else "⚠️ Ничего не удалено"
+            bot.edit_message_text(response, chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
+            user_selections.pop(chat_id, None)
+            user_states[chat_id] = 'events'
+            bot.send_message(chat_id, "📅 *События*\n\nВыберите действие:", 
+                            parse_mode='Markdown', reply_markup=create_events_keyboard())
+
+        elif action == 'clear' and parts[1] == 'event' and parts[2] == 'delete':
+            user_selections.pop(chat_id, None)
+            keyboard = create_events_delete_keyboard(chat_id)
+            bot.edit_message_text(
+                "🗑️ *Выберите события для удаления (нажимайте на кнопки, затем 'Подтвердить'):*",
+                chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=keyboard
+            )
+            bot.answer_callback_query(call.id, "Выбор очищен")
+
+        else:
+            logging.error(f"Unexpected callback_data structure: {data}")
+            bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
 
     except Exception as e:
         logging.error(f"Error processing callback query from {chat_id}: {e}, callback_data: {data}")
@@ -681,6 +726,10 @@ def handle_callback_query(call):
             show_inventory(chat_id, state[1])
         elif isinstance(state, tuple) and state[0] in ('give_select', 'give_who', 'delete_select', 'return_select'):
             show_inventory(chat_id, state[-1])
+        elif state == 'delete_event_select':
+            bot.send_message(chat_id, "📅 *События*\n\nВыберите действие:", 
+                            parse_mode='Markdown', reply_markup=create_events_keyboard())
+            user_states[chat_id] = 'events'
         else:
             show_main_menu(chat_id)
 
