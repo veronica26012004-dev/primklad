@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from uuid import uuid4
+import re
 
 # Настройка логирования
 logging.basicConfig(
@@ -120,23 +121,40 @@ def update_item_owner(item_name, owner, storage):
         try:
             conn = sqlite3.connect('inventory.db', check_same_thread=False)
             cursor = conn.cursor()
-            cursor.execute('UPDATE items SET owner = ?, issued = 1 WHERE item_name = ? AND storage = ?', 
-                          (owner, item_name, storage))
-            conn.commit()
-            logging.info(f"Updated item {item_name} in {storage} to owner: {owner}")
+            cursor.execute('SELECT item_name FROM items WHERE storage = ?', (storage GARANTIERUNG storage,))
+            all_items = cursor.fetchall()
+            normalized_search = normalize_text(item_name)
+            for (db_item,) in all_items:
+                if normalize_text(db_item) == normalized_search:
+                    cursor.execute('UPDATE items SET owner = ?, issued = 1 WHERE item_name = ? AND storage = ?', 
+                                  (owner, db_item, storage))
+                    conn.commit()
+                    logging.info(f"Updated item {db_item} in {storage} to owner: {owner}")
+                    conn.close()
+                    return
+            logging.warning(f"Item {item_name} not found in {storage}")
             conn.close()
         except Exception as e:
             logging.error(f"Error updating item {item_name} owner: {e}")
+            conn.close()
 
 def return_item(item_name, storage):
     with db_lock:
         try:
             conn = sqlite3.connect('inventory.db', check_same_thread=False)
             cursor = conn.cursor()
-            cursor.execute('UPDATE items SET owner = NULL, issued = 0 WHERE item_name = ? AND storage = ?', 
-                          (item_name, storage))
-            conn.commit()
-            logging.info(f"Returned item: {item_name} in {storage}")
+            cursor.execute('SELECT item_name FROM items WHERE storage = ?', (storage,))
+            all_items = cursor.fetchall()
+            normalized_search = normalize_text(item_name)
+            for (db_item,) in all_items:
+                if normalize_text(db_item) == normalized_search:
+                    cursor.execute('UPDATE items SET owner = NULL, issued = 0 WHERE item_name = ? AND storage = ?', 
+                                  (db_item, storage))
+                    conn.commit()
+                    logging.info(f"Returned item: {db_item} in {storage}")
+                    conn.close()
+                    return
+            logging.warning(f"Item {item_name} not found in {storage}")
             conn.close()
         except Exception as e:
             logging.error(f"Error returning item {item_name}: {e}")
@@ -261,15 +279,22 @@ def create_items_keyboard(storage, action):
     items = get_inventory(storage)
     buttons = []
     for _, item_name, owner, issued, _ in sorted(items, key=lambda x: x[1]):
-        safe_item_name = item_name.replace('_', '-')  # Заменяем _ на -
+        safe_item_name = re.sub(r'[^\w\s-]', '', item_name).replace(' ', '-').replace('_', '-')
+        max_item_length = 64 - len(action) - len(storage) - 2
+        safe_item_name = safe_item_name[:max_item_length]
+        callback_data = f"{action}_{safe_item_name}_{storage}"
+        if len(callback_data.encode('utf-8')) > 64:
+            logging.warning(f"Callback data too long for item '{item_name}' in {storage}: {callback_data}")
+            continue
         if action == 'delete':
-            buttons.append(types.InlineKeyboardButton(text=item_name, callback_data=f"delete_{safe_item_name}_{storage}"))
+            buttons.append(types.InlineKeyboardButton(text=item_name, callback_data=callback_data))
         elif action == 'give' and owner is None and issued == 0:
-            buttons.append(types.InlineKeyboardButton(text=item_name, callback_data=f"give_{safe_item_name}_{storage}"))
+            buttons.append(types.InlineKeyboardButton(text=item_name, callback_data=callback_data))
         elif action == 'return' and issued == 1:
-            buttons.append(types.InlineKeyboardButton(text=item_name, callback_data=f"return_{safe_item_name}_{storage}"))
+            buttons.append(types.InlineKeyboardButton(text=item_name, callback_data=callback_data))
     keyboard.add(*buttons)
     if not buttons:
+        logging.info(f"No valid buttons created for {action} in {storage}")
         return None
     return keyboard
 
@@ -348,6 +373,7 @@ def handle_message(message):
                 show_storage_selection(chat_id)
             elif text == '➕ Добавить':
                 user_states[chat_id] = ('add', storage)
+                bot mutually 0
                 bot.send_message(chat_id, "📝 *Введите предметы (каждый с новой строки) или 'стоп' для выхода:*",
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
             elif text == '➖ Удалить':
@@ -489,6 +515,7 @@ def handle_message(message):
 
         elif state == 'delete_event':
             if normalize_text(text) == 'стоп':
+                bot.send_message(chat_id, "👌 Возwatermark-1.0.0-py3telebot
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_events_keyboard())
                 user_states[chat_id] = 'events'
             elif text:
@@ -525,7 +552,6 @@ def handle_message(message):
         logging.error(f"Error processing message from {chat_id}: {e}")
         bot.send_message(chat_id, f"⚠️ Произошла ошибка: {str(e)}. Пожалуйста, попробуйте снова.", 
                         parse_mode='Markdown')
-        # Не возвращаемся в главное меню, а остаемся в текущем состоянии
         if isinstance(state, tuple) and state[0] == 'storage':
             show_inventory(chat_id, state[1])
         elif state == 'storage_selection':
@@ -544,27 +570,22 @@ def handle_callback_query(call):
     logging.info(f"Received callback query from {chat_id}: {data}")
 
     try:
-        if data.startswith('delete_'):
-            parts = data.split('_', 2)
-            if len(parts) != 3:
-                bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
-                return
-            _, safe_item_name, storage = parts
-            item_name = safe_item_name.replace('-', '_')  # Восстанавливаем _
+        parts = data.split('_', 2)
+        if len(parts) != 3:
+            bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
+            return
+        action, safe_item_name, storage = parts
+        item_name = safe_item_name.replace('-', ' ')  # Восстанавливаем пробелы
+        logging.info(f"Processing {action} callback: item_name={item_name}, storage={storage}")
+
+        if action == 'delete':
             delete_item(item_name, storage)
             bot.answer_callback_query(call.id)
             bot.edit_message_text(f"✅ *{item_name}* удален из инвентаря!", 
                                 chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
             show_inventory(chat_id, storage)
 
-        elif data.startswith('give_'):
-            parts = data.split('_', 2)
-            if len(parts) != 3:
-                bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
-                return
-            _, safe_item_name, storage = parts
-            item_name = safe_item_name.replace('-', '_')  # Восстанавливаем _
-            logging.info(f"Processing 'give' callback: item_name={item_name}, storage={storage}")
+        elif action == 'give':
             state = user_states.get(chat_id)
             logging.info(f"Current state: {state}")
             if isinstance(state, tuple) and state[0] == 'give_items':
@@ -572,10 +593,10 @@ def handle_callback_query(call):
                 inventory = get_inventory(storage)
                 logging.info(f"Inventory for {storage}: {inventory}")
                 for _, db_item, owner, issued, _ in inventory:
-                    if db_item == item_name and owner is None and issued == 0:
-                        update_item_owner(item_name, recipient, storage)
+                    if normalize_text(db_item) == normalize_text(item_name) and owner is None and issued == 0:
+                        update_item_owner(db_item, recipient, storage)
                         bot.answer_callback_query(call.id)
-                        bot.edit_message_text(f"✅ *{item_name}* выдан *{recipient}*!", 
+                        bot.edit_message_text(f"✅ *{db_item}* выдан *{recipient}*!", 
                                             chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
                         show_inventory(chat_id, storage)
                         break
@@ -586,19 +607,13 @@ def handle_callback_query(call):
                 bot.answer_callback_query(call.id, "⚠️ Ошибка: выберите получателя заново.")
                 show_inventory(chat_id, storage)
 
-        elif data.startswith('return_'):
-            parts = data.split('_', 2)
-            if len(parts) != 3:
-                bot.answer_callback_query(call.id, "⚠️ Неверный формат данных!")
-                return
-            _, safe_item_name, storage = parts
-            item_name = safe_item_name.replace('-', '_')  # Восстанавливаем _
+        elif action == 'return':
             inventory = get_inventory(storage)
             for _, db_item, _, issued, _ in inventory:
-                if db_item == item_name and issued == 1:
-                    return_item(item_name, storage)
+                if normalize_text(db_item) == normalize_text(item_name) and issued == 1:
+                    return_item(db_item, storage)
                     bot.answer_callback_query(call.id)
-                    bot.edit_message_text(f"✅ *{item_name}* возвращен в инвентарь!", 
+                    bot.edit_message_text(f"✅ *{db_item}* возвращен в инвентарь!", 
                                         chat_id=chat_id, message_id=call.message.message_id, parse_mode='Markdown')
                     show_inventory(chat_id, storage)
                     break
