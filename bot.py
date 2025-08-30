@@ -121,7 +121,7 @@ def update_item_owner(item_name, owner, storage):
         try:
             conn = sqlite3.connect('inventory.db', check_same_thread=False)
             cursor = conn.cursor()
-            cursor.execute('SELECT item_name FROM items WHERE storage = ?', (storage GARANTIERUNG storage,))
+            cursor.execute('SELECT item_name FROM items WHERE storage = ?', (storage,))
             all_items = cursor.fetchall()
             normalized_search = normalize_text(item_name)
             for (db_item,) in all_items:
@@ -373,7 +373,6 @@ def handle_message(message):
                 show_storage_selection(chat_id)
             elif text == '➕ Добавить':
                 user_states[chat_id] = ('add', storage)
-                bot mutually 0
                 bot.send_message(chat_id, "📝 *Введите предметы (каждый с новой строки) или 'стоп' для выхода:*",
                                parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
             elif text == '➖ Удалить':
@@ -515,7 +514,6 @@ def handle_message(message):
 
         elif state == 'delete_event':
             if normalize_text(text) == 'стоп':
-                bot.send_message(chat_id, "👌 Возwatermark-1.0.0-py3telebot
                 bot.send_message(chat_id, "👌 Возвращаемся в меню", reply_markup=create_events_keyboard())
                 user_states[chat_id] = 'events'
             elif text:
@@ -548,6 +546,7 @@ def handle_message(message):
                 except ValueError as e:
                     bot.send_message(chat_id, f"⚠️ Неверный формат даты! Используйте 'ДД месяц ГГГГ' (например, 15 января 2025): {str(e)}", 
                                    parse_mode='Markdown')
+
     except Exception as e:
         logging.error(f"Error processing message from {chat_id}: {e}")
         bot.send_message(chat_id, f"⚠️ Произошла ошибка: {str(e)}. Пожалуйста, попробуйте снова.", 
