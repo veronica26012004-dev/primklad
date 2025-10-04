@@ -5,9 +5,15 @@ import os
 from datetime import datetime, timedelta
 from uuid import uuid4
 import re
+from flask import Flask, request  # Добавляем Flask
+
+# Инициализация Flask
+app = Flask(__name__)
 
 # Загрузка токена
-TOKEN = os.getenv('BOT_TOKEN', '8464322471:AAE3QyJrHrCS8lwAj4jD8NLuOy5kYnToumM')
+TOKEN = os.getenv('BOT_TOKEN')
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не установлен в переменных окружения")
 bot = telebot.TeleBot(TOKEN)
 
 # Блокировка для thread-safe доступа
@@ -903,7 +909,7 @@ def handle_callback(call):
                         show_events_menu(chat_id)
 
             else:
-                # Обработка выбора предметов (старый код)
+                # Обработка выбора предметов
                 parts = callback_data.split('_')
                 if len(parts) < 4:
                     bot.answer_callback_query(call.id, "❌ Ошибка: неверный формат callback")
@@ -1052,11 +1058,7 @@ def handle_callback(call):
             show_events_menu(chat_id)
 
         elif callback_data.startswith('confirm_'):
-            # Обработка подтверждения для предметов (только если не начинается с confirm_event_)
-            if callback_data.startswith('confirm_event_'):
-                # Это должно обрабатываться в другом блоке
-                return
-
+            # Обработка подтверждения для предметов
             parts = callback_data.split('_')
             if len(parts) < 3:
                 bot.answer_callback_query(call.id, "❌ Ошибка: неверный формат callback")
@@ -1116,11 +1118,7 @@ def handle_callback(call):
             show_storage_menu(chat_id, storage)
 
         elif callback_data.startswith('clear_'):
-            # Обработка очистки для предметов (только если не начинается с clear_event_)
-            if callback_data.startswith('clear_event_'):
-                # Это должно обрабатываться в другом блоке
-                return
-
+            # Обработка очистки для предметов
             parts = callback_data.split('_')
             if len(parts) < 3:
                 bot.answer_callback_query(call.id, "❌ Ошибка: неверный формат callback")
@@ -1186,7 +1184,38 @@ def handle_callback(call):
         else:
             show_storage_selection(chat_id)
 
-# Запуск бота
+# Webhook endpoint
+@app.route('/' + TOKEN, methods=['POST'])
+def webhook():
+    try:
+        update = telebot.types.Update.de_json(request.get_json())
+        if update:
+            bot.process_new_updates([update])
+        return '', 200
+    except Exception as e:
+        print(f"Ошибка обработки webhook: {e}")
+        return '', 500
+
+# Health check endpoint
+@app.route('/')
+def health_check():
+    return 'Bot is running', 200
+
 if __name__ == '__main__':
-    print("Запуск бота...")
-    bot.infinity_polling()
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+
+    # Установка webhook
+    WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+    if not WEBHOOK_URL:
+        raise ValueError("WEBHOOK_URL не установлен в переменных окружения")
+    
+    logger.info("Установка webhook...")
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL + '/' + TOKEN)
+    
+    # Запуск Flask-сервера
+    port = int(os.getenv('PORT', 5000))
+    logger.info(f"Запуск сервера на порту {port}...")
+    app.run(host='0.0.0.0', port=port)
