@@ -1230,7 +1230,7 @@ def keep_alive():
             logger.info("Keep-alive запрос отправлен")
         except Exception as e:
             logger.warning(f"Ошибка keep-alive: {e}")
-        time.sleep(300)  # Каждые 5 минут
+        time.sleep(50)  # Каждые 5 минут
 
 if __name__ == '__main__':
     # Запускаем поток для поддержания активности
@@ -1250,3 +1250,4 @@ if __name__ == '__main__':
     # Запускаем Flask приложение
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
