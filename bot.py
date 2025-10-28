@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Загрузка токена
-TOKEN = os.getenv('BOT_TOKEN')
+# Загрузка токена - для хостинга используем переменную окружения
+TOKEN = os.getenv('BOT_TOKEN')  # Раскомментировано для хостинга
 if not TOKEN:
     logger.error("BOT_TOKEN не установлен. Убедитесь, что вы добавили его в настройки Render.")
     raise ValueError("BOT_TOKEN is not set. Set env var and restart.")
@@ -59,6 +59,10 @@ STORAGE_IDS = {
     'Гринбокс 12': 'gb12'
 }
 REVERSE_STORAGE_IDS = {v: k for k, v in STORAGE_IDS.items()}
+
+# Режим админа
+ADMIN_MODE = {}  # chat_id -> bool
+SECRET_WORD = "админ123"  # Секретное слово для активации режима админа
 
 # Функция для получения пути к файлу хранилища
 def get_items_file(storage):
@@ -94,6 +98,15 @@ def init_files():
 user_states = {}
 user_selections = {}
 user_item_lists = {}
+
+# Проверка прав админа
+def is_admin(chat_id):
+    return ADMIN_MODE.get(chat_id, False)
+
+# Активация режима админа
+def activate_admin_mode(chat_id):
+    ADMIN_MODE[chat_id] = True
+    logger.info(f"Режим админа активирован для chat_id: {chat_id}")
 
 # Нормализация текста
 def normalize_text(text):
@@ -376,7 +389,7 @@ def delete_event(event_ids):
         return []
 
 # UI / клавиатуры
-def create_main_menu_keyboard():
+def create_main_menu_keyboard(chat_id):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
         types.KeyboardButton('📦 Кладовая'),
@@ -385,7 +398,7 @@ def create_main_menu_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-def create_storage_selection_keyboard():
+def create_storage_selection_keyboard(chat_id):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
         types.KeyboardButton('📍 Гринбокс 11'),
@@ -395,27 +408,29 @@ def create_storage_selection_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-def create_storage_keyboard():
+def create_storage_keyboard(chat_id):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    buttons = [
-        types.KeyboardButton('➕ Добавить предмет'),
-        types.KeyboardButton('➖ Удалить предмет'),
-        types.KeyboardButton('🎁 Выдать предмет'),
-        types.KeyboardButton('↩️ Вернуть предмет'),
-        types.KeyboardButton('📋 Показать инвентарь'),
-        types.KeyboardButton('🔙 Назад')
-    ]
+    buttons = []
+    if is_admin(chat_id):
+        buttons.extend([
+            types.KeyboardButton('➕ Добавить предмет'),
+            types.KeyboardButton('➖ Удалить предмет'),
+            types.KeyboardButton('🎁 Выдать предмет'),
+            types.KeyboardButton('↩️ Вернуть предмет')
+        ])
+    buttons.append(types.KeyboardButton('🔙 Назад'))
     keyboard.add(*buttons)
     return keyboard
 
-def create_events_keyboard():
+def create_events_keyboard(chat_id):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    buttons = [
-        types.KeyboardButton('➕ Добавить событие'),
-        types.KeyboardButton('📅 Посмотреть события'),
-        types.KeyboardButton('🗑️ Удалить событие'),
-        types.KeyboardButton('🔙 В главное меню')
-    ]
+    buttons = []
+    if is_admin(chat_id):
+        buttons.extend([
+            types.KeyboardButton('➕ Добавить событие'),
+            types.KeyboardButton('🗑️ Удалить событие')
+        ])
+    buttons.append(types.KeyboardButton('🔙 В главное меню'))
     keyboard.add(*buttons)
     return keyboard
 
@@ -484,9 +499,19 @@ def create_events_delete_keyboard(chat_id):
                 date_obj.strftime('%B'),
                 MONTHS_RU[date_obj.month]
             )
-            display_str = f"{event_name} ({formatted_date})"
+            # Сокращаем длинные названия для кнопок
+            if len(event_name) > 25:
+                display_event_name = event_name[:22] + '...'
+            else:
+                display_event_name = event_name
+            display_str = f"{display_event_name} ({formatted_date})"
         except ValueError:
-            display_str = f"{event_name} ({event_date})"
+            if len(event_name) > 25:
+                display_event_name = event_name[:22] + '...'
+            else:
+                display_event_name = event_name
+            display_str = f"{display_event_name} ({event_date})"
+
         display_name = display_str[:35] + '...' if len(display_str) > 35 else display_str
         is_selected = event_id in user_selections.get(chat_id, [])
         prefix = "✅ " if is_selected else "◻️ "
@@ -514,24 +539,26 @@ def create_events_delete_keyboard(chat_id):
 
 # Функции отображения
 def show_main_menu(chat_id):
-    text = "📋 *Главное меню*\n\nВыберите раздел:"
-    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_main_menu_keyboard())
+    admin_status = "👑 *Режим админа активирован*\n\n" if is_admin(chat_id) else ""
+    text = f"{admin_status}📋 *Главное меню*\n\nВыберите раздел:"
+    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_main_menu_keyboard(chat_id))
     user_states[chat_id] = 'main_menu'
     user_selections.pop(chat_id, None)
     user_item_lists.pop(chat_id, None)
 
 def show_storage_selection(chat_id):
     text = "📦 *Выберите кладовую:*"
-    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_storage_selection_keyboard())
+    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_storage_selection_keyboard(chat_id))
     user_states[chat_id] = 'storage_selection'
     user_selections.pop(chat_id, None)
     user_item_lists.pop(chat_id, None)
 
 def show_storage_menu(chat_id, storage, message_text=None):
     if message_text:
-        bot.send_message(chat_id, message_text, parse_mode='Markdown', reply_markup=create_storage_keyboard())
+        bot.send_message(chat_id, message_text, parse_mode='Markdown', reply_markup=create_storage_keyboard(chat_id))
     else:
-        bot.send_message(chat_id, f"📦 *Кладовая: {storage}*\n\nВыберите действие:", parse_mode='Markdown', reply_markup=create_storage_keyboard())
+        admin_status = " 👑" if is_admin(chat_id) else ""
+        bot.send_message(chat_id, f"📦 *Кладовая: {storage}*{admin_status}\n\nВыберите действие:", parse_mode='Markdown', reply_markup=create_storage_keyboard(chat_id))
     user_states[chat_id] = ('storage', storage)
     user_selections.pop(chat_id, None)
     user_item_lists.pop(chat_id, None)
@@ -564,7 +591,7 @@ def show_inventory(chat_id, storage):
                 text += f"🔸 {item_name} - выдано ({owner})\n"
                 given_count += 1
         text += f"\n📊 Статистика: {available_count} доступно, {given_count} выдано"
-    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_storage_keyboard())
+    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_storage_keyboard(chat_id))
     user_states[chat_id] = ('storage', storage)
     user_selections.pop(chat_id, None)
     user_item_lists.pop(chat_id, None)
@@ -572,10 +599,11 @@ def show_inventory(chat_id, storage):
 
 def show_events_menu(chat_id, message_text=None):
     if message_text:
-        bot.send_message(chat_id, message_text, parse_mode='Markdown', reply_markup=create_events_keyboard())
+        bot.send_message(chat_id, message_text, parse_mode='Markdown', reply_markup=create_events_keyboard(chat_id))
     else:
-        text = "📅 *Управление событиями*\n\nВыберите действие:"
-        bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_events_keyboard())
+        admin_status = " 👑" if is_admin(chat_id) else ""
+        text = f"📅 *Управление событиями*{admin_status}\n\nВыберите действие:"
+        bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_events_keyboard(chat_id))
     user_states[chat_id] = 'events_menu'
     user_selections.pop(chat_id, None)
     user_item_lists.pop(chat_id, None)
@@ -588,15 +616,89 @@ def show_events_list(chat_id):
         show_events_menu(chat_id)
         logger.info(f"Список событий пуст, время: {time.time() - start_time:.2f} сек")
         return
+
     text = "📅 *Все события:*\n\n"
-    for _, event_name, event_date in sorted(events, key=lambda x: x[2]):
+
+    # Находим самую длинную дату для выравнивания
+    max_date_length = 0
+    formatted_dates = []
+
+    for _, event_name, event_date in events:
         try:
             date_obj = datetime.strptime(event_date, '%Y-%m-%d')
             formatted_date = date_obj.strftime('%d %B %Y').replace(date_obj.strftime('%B'), MONTHS_RU[date_obj.month])
-            text += f"• {event_name} - {formatted_date}\n"
+            date_part = f"• {formatted_date}"
         except ValueError:
-            text += f"• {event_name} - {event_date}\n"
-    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_events_keyboard())
+            date_part = f"• {event_date}"
+
+        formatted_dates.append(date_part)
+        max_date_length = max(max_date_length, len(date_part))
+
+    # Добавляем отступ для " — "
+    text_start_position = max_date_length + 3
+
+    for i, (_, event_name, event_date) in enumerate(sorted(events, key=lambda x: x[2])):
+        date_part = formatted_dates[i]
+
+        # Выравниваем дату
+        aligned_date = date_part.ljust(max_date_length)
+
+        # Определяем, сколько символов помещается в первую строку
+        # Предполагаем, что максимальная ширина сообщения ~45 символов
+        max_total_width = 45
+        available_first_line = max_total_width - len(aligned_date) - 3  # 3 для " — "
+
+        # Разбиваем текст на слова
+        words = event_name.split()
+
+        if not words:
+            text += f"{aligned_date} — \n"
+            continue
+
+        # Формируем первую строку
+        first_line_words = []
+        current_length = 0
+
+        for word in words:
+            word_length = len(word) + (1 if current_length > 0 else 0)  # +1 для пробела
+            if current_length + word_length <= available_first_line:
+                first_line_words.append(word)
+                current_length += word_length
+            else:
+                break
+
+        first_line = " ".join(first_line_words)
+        remaining_words = words[len(first_line_words):]
+
+        # Формируем оставшиеся строки
+        remaining_lines = []
+        if remaining_words:
+            current_line = ""
+            for word in remaining_words:
+                if len(current_line + word) <= 35:  # Максимальная длина последующих строк
+                    if current_line:
+                        current_line += " " + word
+                    else:
+                        current_line = word
+                else:
+                    if current_line:
+                        remaining_lines.append(current_line)
+                    current_line = word
+            if current_line:
+                remaining_lines.append(current_line)
+
+        # Формируем вывод
+        if not remaining_lines:
+            # Вся строка поместилась в одну линию
+            text += f"{aligned_date} — {first_line}\n"
+        else:
+            # Многострочный текст
+            text += f"{aligned_date} — {first_line}\n"
+            indent = " " * text_start_position
+            for line in remaining_lines:
+                text += f"{indent}{line}\n"
+
+    bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=create_events_keyboard(chat_id))
     user_states[chat_id] = 'events_menu'
     logger.info(f"Список событий показан за {time.time() - start_time:.2f} сек")
 
@@ -608,12 +710,30 @@ def start(message):
     welcome_text += "📋 *Доступные разделы:*\n"
     welcome_text += "• 📦 Кладовая - управление инвентарем\n"
     welcome_text += "• 📅 События - управление мероприятиями\n\n"
-    welcome_text += "Выберите нужный раздел в меню ниже 👇"
-    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=create_main_menu_keyboard())
+
+    if is_admin(message.chat.id):
+        welcome_text += "👑 *Режим админа активирован*\n"
+    else:
+        welcome_text += "💡 *Для доступа к функциям управления введите секретное слово*"
+
+    welcome_text += "\nВыберите нужный раздел в меню ниже 👇"
+
+    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=create_main_menu_keyboard(message.chat.id))
     user_states[message.chat.id] = 'main_menu'
     user_selections.pop(message.chat.id, None)
     user_item_lists.pop(message.chat.id, None)
     logger.info(f"Команда /start обработана за {time.time() - start_time:.2f} сек")
+
+# Обработчик секретного слова
+@bot.message_handler(func=lambda message: normalize_text(message.text) == normalize_text(SECRET_WORD))
+def handle_secret_word(message):
+    chat_id = message.chat.id
+    if not is_admin(chat_id):
+        activate_admin_mode(chat_id)
+        bot.send_message(chat_id, "✅ *Режим админа активирован!* Теперь вам доступны все функции управления.", parse_mode='Markdown')
+        show_main_menu(chat_id)
+    else:
+        bot.send_message(chat_id, "👑 Режим админа уже активирован.", parse_mode='Markdown')
 
 @bot.message_handler(func=lambda message: message.text == '🔙 В главное меню')
 def back_to_main_menu(message):
@@ -631,7 +751,7 @@ def handle_storage(message):
 @bot.message_handler(func=lambda message: message.text == '📅 События')
 def handle_events(message):
     start_time = time.time()
-    show_events_menu(message.chat.id)
+    show_events_list(message.chat.id)  # Сразу показываем события
     logger.info(f"Обработка событий за {time.time() - start_time:.2f} сек")
 
 @bot.message_handler(func=lambda message: message.text == '🔙 Назад')
@@ -648,8 +768,10 @@ def handle_storage_selection(message):
     logger.info(f"Обработка выбора кладовой: message.text='{message.text}', chat_id={chat_id}")
     storage = message.text.replace('📍 ', '').strip()
     logger.info(f"Нормализованная кладовая: {storage}")
+
     if storage in STORAGE_IDS:
-        show_storage_menu(chat_id, storage)
+        # Сразу показываем инвентарь выбранной кладовой
+        show_inventory(chat_id, storage)
     elif message.text == '🔙 В главное меню':
         logger.info(f"Возврат в главное меню для chat_id {chat_id}")
         show_main_menu(chat_id)
@@ -671,18 +793,31 @@ def handle_storage_actions(message):
         bot.send_message(chat_id, "❌ Ошибка состояния, выберите кладовую снова")
         show_storage_selection(chat_id)
         return
+
     logger.info(f"Обработка действия в кладовой {storage} для chat_id {chat_id}: {message.text}")
+
     if message.text == '➕ Добавить предмет':
+        if not is_admin(chat_id):
+            bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут добавлять предметы.")
+            return
         bot.send_message(chat_id, "📝 Введите названия предметов для добавления (каждый предмет с новой строки) или нажмите '❌ Отмена':", reply_markup=create_cancel_keyboard())
         user_states[chat_id] = ('adding_item', storage)
+
     elif message.text == '➖ Удалить предмет':
+        if not is_admin(chat_id):
+            bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут удалять предметы.")
+            return
         keyboard = create_items_keyboard(chat_id, storage, 'delete')
         if keyboard:
             bot.send_message(chat_id, "🗑️ Выберите предметы для удаления:", reply_markup=keyboard)
         else:
             bot.send_message(chat_id, "📭 В кладовой нет предметов для удаления")
             show_storage_menu(chat_id, storage)
+
     elif message.text == '🎁 Выдать предмет':
+        if not is_admin(chat_id):
+            bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут выдавать предметы.")
+            return
         keyboard = create_items_keyboard(chat_id, storage, 'give')
         if keyboard:
             selected_count = len(user_selections.get(chat_id, []))
@@ -692,18 +827,22 @@ def handle_storage_actions(message):
         else:
             bot.send_message(chat_id, "📭 В кладовой нет доступных предметов для выдачи")
             show_storage_menu(chat_id, storage)
+
     elif message.text == '↩️ Вернуть предмет':
+        if not is_admin(chat_id):
+            bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут возвращать предметы.")
+            return
         keyboard = create_items_keyboard(chat_id, storage, 'return')
         if keyboard:
             bot.send_message(chat_id, "↩️ Выберите предметы для возврата:", reply_markup=keyboard)
         else:
             bot.send_message(chat_id, "📭 Нет выданных предметов для возврата")
             show_storage_menu(chat_id, storage)
-    elif message.text == '📋 Показать инвентарь':
-        show_inventory(chat_id, storage)
+
     elif message.text == '🔙 Назад':
         logger.info(f"Возврат к выбору кладовой из storage для chat_id {chat_id}")
         show_storage_selection(chat_id)
+
     logger.info(f"Обработка действий в кладовой за {time.time() - start_time:.2f} сек")
 
 @bot.message_handler(func=lambda message: isinstance(user_states.get(message.chat.id), tuple) and user_states.get(message.chat.id)[0] == 'adding_item')
@@ -718,15 +857,23 @@ def handle_adding_item(message):
         bot.send_message(chat_id, "❌ Ошибка состояния, выберите кладовую снова")
         show_storage_selection(chat_id)
         return
+
+    if not is_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Режим админа деактивирован.")
+        show_storage_menu(chat_id, storage)
+        return
+
     if message.text == '❌ Отмена':
         bot.send_message(chat_id, "❌ Добавление предметов отменено")
         show_storage_menu(chat_id, storage)
         return
+
     item_names = message.text.strip().split('\n')
     if not item_names or all(not name.strip() for name in item_names):
         bot.send_message(chat_id, "❌ Список предметов не может быть пустым. Добавление отменено")
         show_storage_menu(chat_id, storage)
         return
+
     added_items = []
     existing_items = []
     failed_items = []
@@ -743,6 +890,7 @@ def handle_adding_item(message):
                 added_items.append(item_name)
             else:
                 failed_items.append(item_name)
+
     response = ""
     if added_items:
         response += f"✅ Добавлены предметы:\n" + "\n".join(f"• {name}" for name in added_items) + "\n"
@@ -750,6 +898,7 @@ def handle_adding_item(message):
         response += f"⚠️ Эти предметы уже существуют:\n" + "\n".join(f"• {name}" for name in existing_items) + "\n"
     if failed_items:
         response += f"❌ Не удалось добавить:\n" + "\n".join(f"• {name}" for name in failed_items) + "\n"
+
     bot.send_message(chat_id, response.strip() or "❌ Не удалось добавить ни один предмет")
     show_storage_menu(chat_id, storage)
     logger.info(f"Добавление предметов обработано за {time.time() - start_time:.2f} сек")
@@ -758,12 +907,18 @@ def handle_adding_item(message):
 def handle_events_actions(message):
     start_time = time.time()
     chat_id = message.chat.id
+
     if message.text == '➕ Добавить событие':
+        if not is_admin(chat_id):
+            bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут добавлять события.")
+            return
         bot.send_message(chat_id, "📝 Введите название события или '❌ Отмена':", reply_markup=create_cancel_keyboard())
         user_states[chat_id] = 'adding_event_name'
-    elif message.text == '📅 Посмотреть события':
-        show_events_list(chat_id)
+
     elif message.text == '🗑️ Удалить событие':
+        if not is_admin(chat_id):
+            bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут удалять события.")
+            return
         keyboard = create_events_delete_keyboard(chat_id)
         if keyboard:
             bot.send_message(chat_id, "🗑️ Выберите события для удаления:", reply_markup=keyboard)
@@ -771,18 +926,27 @@ def handle_events_actions(message):
         else:
             bot.send_message(chat_id, "📭 Нет событий для удаления")
             show_events_menu(chat_id)
+
     elif message.text == '🔙 В главное меню':
         show_main_menu(chat_id)
+
     logger.info(f"Обработка действий с событиями за {time.time() - start_time:.2f} сек")
 
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'adding_event_name')
 def handle_adding_event_name(message):
     start_time = time.time()
     chat_id = message.chat.id
+
+    if not is_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Режим админа деактивирован.")
+        show_events_menu(chat_id)
+        return
+
     if message.text == '❌ Отмена':
         bot.send_message(chat_id, "❌ Добавление события отменено")
         show_events_menu(chat_id)
         return
+
     event_name = message.text.strip()
     if event_name:
         user_states[chat_id] = ('adding_event_date', event_name)
@@ -797,15 +961,23 @@ def handle_adding_event_date(message):
     start_time = time.time()
     chat_id = message.chat.id
     state_data = user_states[chat_id]
+
+    if not is_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Режим админа деактивирован.")
+        show_events_menu(chat_id)
+        return
+
     if len(state_data) >= 2:
         event_name = state_data[1]
     else:
         show_events_menu(chat_id)
         return
+
     if message.text == '❌ Отмена':
         bot.send_message(chat_id, "❌ Добавление события отменено")
         show_events_menu(chat_id)
         return
+
     date_str = message.text.strip().lower()
     try:
         match = re.match(r'^(\d{1,2})\s+([а-яё]+)\s+(\d{4})$', date_str)
@@ -839,6 +1011,12 @@ def handle_entering_owner_name(message):
     start_time = time.time()
     chat_id = message.chat.id
     state_data = user_states[chat_id]
+
+    if not is_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Режим админа деактивирован.")
+        show_storage_selection(chat_id)
+        return
+
     if len(state_data) >= 3:
         storage = state_data[1]
         selected_items = state_data[2]
@@ -847,10 +1025,12 @@ def handle_entering_owner_name(message):
         bot.send_message(chat_id, "❌ Ошибка состояния, выберите кладовую снова")
         show_storage_selection(chat_id)
         return
+
     owner = message.text.strip()
     if not owner:
         bot.send_message(chat_id, "❌ Имя получателя не может быть пустым. Введите имя еще раз:")
         return
+
     updated_names = update_items_owner(selected_items, owner, storage)
     if updated_names:
         items_list = "\n".join([f"• {name}" for name in updated_names])
@@ -858,18 +1038,27 @@ def handle_entering_owner_name(message):
     else:
         bot.send_message(chat_id, "❌ Ошибка при выдаче предметов")
         logger.error(f"Не удалось выдать предметы: {selected_items} для {owner}")
+
     user_states.pop(chat_id, None)
     user_selections.pop(chat_id, None)
     user_item_lists.pop(chat_id, None)
     show_storage_menu(chat_id, storage)
     logger.info(f"Обработка выдачи предметов за {time.time() - start_time:.2f} сек")
 
+# Callback обработчики
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     start_time = time.time()
     callback_data = call.data
     chat_id = call.message.chat.id
     logger.info(f"Callback data: {callback_data}, chat_id: {chat_id}")
+
+    # Для действий, требующих прав админа, проверяем доступ
+    if callback_data.startswith('confirm_') and not callback_data.startswith('confirm_event_'):
+        if not is_admin(chat_id):
+            bot.answer_callback_query(call.id, "❌ Недостаточно прав. Только для администраторов.")
+            return
+
     try:
         if callback_data.startswith('select_'):
             if callback_data.startswith('select_event_'):
@@ -989,6 +1178,10 @@ def handle_callback(call):
                         bot.answer_callback_query(call.id, "❌ Ошибка при обновлении списка предметов")
                         show_storage_menu(chat_id, storage)
         elif callback_data == 'confirm_event_delete':
+            if not is_admin(chat_id):
+                bot.answer_callback_query(call.id, "❌ Недостаточно прав. Только для администраторов.")
+                return
+
             selected_events = user_selections.get(chat_id, [])
             if not selected_events:
                 bot.answer_callback_query(call.id, "❌ Не выбрано ни одного события")
@@ -1147,7 +1340,7 @@ def handle_callback(call):
             show_storage_selection(chat_id)
     logger.info(f"Callback обработан за {time.time() - start_time:.2f} сек")
 
-# Вебхук
+# Вебхук для хостинга
 @app.route('/webhook', methods=['POST'])
 def webhook():
     start_time = time.time()
@@ -1170,7 +1363,7 @@ def webhook():
 def index():
     return "Бот управления инвентарем работает!", 200
 
-# Keep-Alive
+# Keep-Alive для хостинга
 def keep_alive():
     while True:
         try:
@@ -1182,9 +1375,10 @@ def keep_alive():
         time.sleep(30)
 
 if __name__ == '__main__':
+    # Для хостинга - используем вебхук
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
-    
+
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', '')}/webhook"
     try:
         bot.remove_webhook()
@@ -1193,6 +1387,6 @@ if __name__ == '__main__':
         logger.info(f"Webhook установлен: {webhook_url}")
     except Exception as e:
         logger.error(f"Ошибка установки webhook: {e}")
-    
+
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
