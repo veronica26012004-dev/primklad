@@ -58,9 +58,6 @@ STORAGE_IDS = {
 }
 REVERSE_STORAGE_IDS = {v: k for k, v in STORAGE_IDS.items()}
 
-# Режим админа
-SECRET_WORD = "админ123"
-
 # Нормализация текста
 def normalize_text(text):
     return ' '.join(text.strip().split()).lower()
@@ -699,7 +696,7 @@ def start(message):
         welcome_text += "👑 Режим админа активирован\n"
         welcome_text += "• 👑 Админы - управление администраторами\n\n"
     else:
-        welcome_text += "💡 Для доступа к функциям управления введите секретное слово"
+        welcome_text += "💡 Для получения прав администратора обратитесь к существующему администратору"
     welcome_text += "\nВыберите нужный раздел в меню ниже 👇"
     
     bot.send_message(message.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(message.chat.id))
@@ -707,22 +704,8 @@ def start(message):
     user_selections.pop(message.chat.id, None)
     user_item_lists.pop(message.chat.id, None)
 
-@bot.message_handler(func=lambda message: normalize_text(message.text) == normalize_text(SECRET_WORD))
-def handle_secret_word(message):
-    chat_id = message.chat.id
-    username = message.from_user.username
-    
-    if not is_admin(chat_id):
-        if username:
-            if add_admin(username, chat_id):
-                bot.send_message(chat_id, "✅ Режим админа активирован! Теперь вам доступны все функции управления, включая управление администраторами.")
-                show_main_menu(chat_id)
-            else:
-                bot.send_message(chat_id, "❌ Ошибка при активации режима админа.")
-        else:
-            bot.send_message(chat_id, "❌ У вас не установлен username в Telegram. Пожалуйста, установите username в настройках Telegram и попробуйте снова.")
-    else:
-        bot.send_message(chat_id, "👑 Режим админа уже активирован.")
+# Убрана обработка секретного слова "админ123"
+# @bot.message_handler(func=lambda message: normalize_text(message.text) == normalize_text(SECRET_WORD))
 
 # Основные обработчики кнопок
 @bot.message_handler(func=lambda message: message.text == '🔙 В главное меню')
@@ -887,6 +870,17 @@ def handle_adding_admin(message):
         
     if add_admin(username):
         bot.send_message(chat_id, f"✅ Администратор @{username.lstrip('@')} добавлен")
+        
+        # Отправляем сообщение новому админу (если он уже запускал бота)
+        try:
+            # Ищем chat_id по username (это приблизительный метод)
+            # В реальном приложении нужно сохранять chat_id при первом взаимодействии
+            new_admin_message = "🎉 Вас добавили в администраторы бота! Теперь вам доступны все функции управления."
+            # Здесь можно добавить логику для отправки сообщения новому админу
+            # Например, если у нас есть его chat_id в базе данных
+        except Exception as e:
+            logger.error(f"Ошибка отправки сообщения новому админу: {e}")
+            
     else:
         bot.send_message(chat_id, f"❌ Ошибка при добавлении администратора @{username.lstrip('@')}. Возможно, такой администратор уже существует.")
     show_admins_menu(chat_id)
