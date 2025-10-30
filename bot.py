@@ -30,8 +30,8 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-# Настройки базы данных
-DB_FILE = '/data/inventory_bot.db' if os.environ.get('RENDER') else 'inventory_bot.db'
+# Настройки базы данных - используем текущую директорию на Render
+DB_FILE = 'inventory_bot.db'
 
 # Кэш для данных
 items_cache = {}
@@ -68,9 +68,6 @@ def normalize_text(text):
 # Функции для работы с базой данных
 def init_database():
     """Инициализация базы данных и создание таблиц"""
-    # Создаем директорию для данных если её нет
-    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-    
     with db_lock:
         conn = sqlite3.connect(DB_FILE, check_same_thread=False)
         cursor = conn.cursor()
@@ -1045,6 +1042,9 @@ user_item_lists = {}
 load_admins()
 
 # Webhook для Render
+from flask import Flask, request
+app = Flask(__name__)
+
 @app.route('/')
 def index():
     return "Бот управления инвентарем работает!", 200
@@ -1065,6 +1065,7 @@ if __name__ == '__main__':
         # Настройка webhook для production
         webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/webhook"
         bot.remove_webhook()
+        time.sleep(1)
         bot.set_webhook(url=webhook_url)
         print(f"Webhook установлен: {webhook_url}")
         
