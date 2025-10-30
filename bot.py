@@ -58,6 +58,9 @@ STORAGE_IDS = {
 }
 REVERSE_STORAGE_IDS = {v: k for k, v in STORAGE_IDS.items()}
 
+# Режим админа
+SECRET_WORD = "админ123"
+
 # Нормализация текста
 def normalize_text(text):
     return ' '.join(text.strip().split()).lower()
@@ -95,6 +98,7 @@ def init_database():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 chat_id INTEGER,
+                is_main_admin INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -121,13 +125,14 @@ def load_admins():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute('SELECT username, chat_id FROM admins')
+        cursor.execute('SELECT username, chat_id, is_main_admin FROM admins')
         admins_data = cursor.fetchall()
         admins_cache = []
         for row in admins_data:
             admin_data = {
                 'username': row['username'],
-                'chat_id': row['chat_id']
+                'chat_id': row['chat_id'],
+                'is_main_admin': bool(row['is_main_admin'])
             }
             admins_cache.append(admin_data)
         logger.info(f"Загружено {len(admins_cache)} администраторов")
@@ -152,14 +157,35 @@ def is_admin(chat_id):
         if result:
             username = get_username_by_chat_id(chat_id)
             if username:
+                cursor.execute('SELECT is_main_admin FROM admins WHERE chat_id = ?', (chat_id,))
+                is_main = cursor.fetchone()['is_main_admin']
                 admins_cache.append({
                     'username': username,
-                    'chat_id': chat_id
+                    'chat_id': chat_id,
+                    'is_main_admin': bool(is_main)
                 })
             return True
         return False
     except Exception as e:
         logger.error(f"Ошибка проверки администратора: {e}")
+        return False
+    finally:
+        conn.close()
+
+def is_main_admin(chat_id):
+    """Проверка, является ли пользователь главным администратором"""
+    for admin in admins_cache:
+        if admin['chat_id'] == chat_id and admin['is_main_admin']:
+            return True
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT 1 FROM admins WHERE chat_id = ? AND is_main_admin = 1', (chat_id,))
+        result = cursor.fetchone()
+        return result is not None
+    except Exception as e:
+        logger.error(f"Ошибка проверки главного администратора: {e}")
         return False
     finally:
         conn.close()
@@ -178,7 +204,7 @@ def get_username_by_chat_id(chat_id):
     finally:
         conn.close()
 
-def add_admin(username, chat_id=None):
+def add_admin(username, chat_id=None, is_main=False):
     """Добавление нового администратора"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -191,18 +217,19 @@ def add_admin(username, chat_id=None):
             return False
             
         cursor.execute(
-            'INSERT INTO admins (username, chat_id) VALUES (?, ?)',
-            (username, chat_id)
+            'INSERT INTO admins (username, chat_id, is_main_admin) VALUES (?, ?, ?)',
+            (username, chat_id, 1 if is_main else 0)
         )
         conn.commit()
         
         admin_data = {
             'username': username,
-            'chat_id': chat_id
+            'chat_id': chat_id,
+            'is_main_admin': is_main
         }
         admins_cache.append(admin_data)
         
-        logger.info(f"Администратор {username} добавлен")
+        logger.info(f"Администратор {username} добавлен (main: {is_main})")
         return True
     except Exception as e:
         logger.error(f"Ошибка добавления администратора {username}: {e}")
@@ -212,11 +239,16 @@ def add_admin(username, chat_id=None):
 
 def remove_admin(username):
     """Удаление администратора"""
+    # Главного админа нельзя удалить
+    main_admin = get_main_admin()
+    if main_admin and main_admin['username'] == username.lstrip('@'):
+        return False
+        
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         username = username.lstrip('@')
-        cursor.execute('DELETE FROM admins WHERE username = ?', (username,))
+        cursor.execute('DELETE FROM admins WHERE username = ? AND is_main_admin = 0', (username,))
         conn.commit()
         
         global admins_cache
@@ -227,6 +259,30 @@ def remove_admin(username):
     except Exception as e:
         logger.error(f"Ошибка удаления администратора {username}: {e}")
         return False
+    finally:
+        conn.close()
+
+def get_main_admin():
+    """Получение главного администратора"""
+    for admin in admins_cache:
+        if admin['is_main_admin']:
+            return admin
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT username, chat_id FROM admins WHERE is_main_admin = 1')
+        result = cursor.fetchone()
+        if result:
+            return {
+                'username': result['username'],
+                'chat_id': result['chat_id'],
+                'is_main_admin': True
+            }
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка получения главного администратора: {e}")
+        return None
     finally:
         conn.close()
 
@@ -516,7 +572,8 @@ def create_main_menu_keyboard(chat_id):
         types.KeyboardButton('📦 Кладовая'),
         types.KeyboardButton('📅 События')
     ]
-    if is_admin(chat_id):
+    # Добавляем кнопку управления админами только для главного админа
+    if is_main_admin(chat_id):
         buttons.append(types.KeyboardButton('👑 Админы'))
     keyboard.add(*buttons)
     return keyboard
@@ -657,8 +714,9 @@ def show_events_list(chat_id):
     user_states[chat_id] = 'events_menu'
 
 def show_admins_menu(chat_id, message_text=None):
-    if not is_admin(chat_id):
-        bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут управлять админами.")
+    """Показать меню управления администраторами"""
+    if not is_main_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Только главный администратор может управлять админами.")
         show_main_menu(chat_id)
         return
         
@@ -672,6 +730,7 @@ def show_admins_menu(chat_id, message_text=None):
     user_item_lists.pop(chat_id, None)
 
 def show_admins_list(chat_id):
+    """Показать список администраторов"""
     admins = get_all_admins()
     if not admins:
         bot.send_message(chat_id, "📭 Нет добавленных администраторов")
@@ -680,8 +739,9 @@ def show_admins_list(chat_id):
         
     text = "👑 Список администраторов:\n\n"
     for i, admin in enumerate(admins, 1):
+        status = " (главный)" if admin['is_main_admin'] else ""
         chat_id_info = f" (chat_id: {admin['chat_id']})" if admin['chat_id'] else " (не активирован)"
-        text += f"{i}. @{admin['username']}{chat_id_info}\n"
+        text += f"{i}. @{admin['username']}{status}{chat_id_info}\n"
         
     bot.send_message(chat_id, text, reply_markup=create_admins_keyboard(chat_id))
 
@@ -694,9 +754,10 @@ def start(message):
     welcome_text += "• 📅 События - управление мероприятиями\n\n"
     if is_admin(message.chat.id):
         welcome_text += "👑 Режим админа активирован\n"
-        welcome_text += "• 👑 Админы - управление администраторами\n\n"
+        if is_main_admin(message.chat.id):
+            welcome_text += "• 👑 Админы - управление администраторами\n\n"
     else:
-        welcome_text += "💡 Для получения прав администратора обратитесь к существующему администратору"
+        welcome_text += "💡 Для доступа к функциям управления обратитесь к администратору"
     welcome_text += "\nВыберите нужный раздел в меню ниже 👇"
     
     bot.send_message(message.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(message.chat.id))
@@ -704,8 +765,32 @@ def start(message):
     user_selections.pop(message.chat.id, None)
     user_item_lists.pop(message.chat.id, None)
 
-# Убрана обработка секретного слова "админ123"
-# @bot.message_handler(func=lambda message: normalize_text(message.text) == normalize_text(SECRET_WORD))
+# Обработчик секретного слова для главного админа
+@bot.message_handler(func=lambda message: normalize_text(message.text) == normalize_text(SECRET_WORD))
+def handle_secret_word(message):
+    chat_id = message.chat.id
+    username = message.from_user.username
+    
+    # Проверяем, есть ли уже главный админ
+    main_admin = get_main_admin()
+    
+    if main_admin:
+        if main_admin['chat_id'] == chat_id:
+            bot.send_message(chat_id, "👑 Вы уже являетесь главным администратором.")
+        else:
+            bot.send_message(chat_id, "❌ Главный администратор уже назначен. Обратитесь к нему для получения прав.")
+        return
+    
+    # Если главного админа нет, создаем его
+    if not username:
+        bot.send_message(chat_id, "❌ У вас не установлен username в Telegram. Пожалуйста, установите username в настройках Telegram и попробуйте снова.")
+        return
+        
+    if add_admin(username, chat_id, is_main=True):
+        bot.send_message(chat_id, "👑 Вы стали главным администратором! Теперь вам доступны все функции управления, включая управление администраторами.")
+        show_main_menu(chat_id)
+    else:
+        bot.send_message(chat_id, "❌ Ошибка при назначении главного администратора.")
 
 # Основные обработчики кнопок
 @bot.message_handler(func=lambda message: message.text == '🔙 В главное меню')
@@ -824,8 +909,8 @@ def show_events_list_for_deletion(chat_id):
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'admins_menu')
 def handle_admins_actions(message):
     chat_id = message.chat.id
-    if not is_admin(chat_id):
-        bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут управлять админами.")
+    if not is_main_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Только главный администратор может управлять админами.")
         show_main_menu(chat_id)
         return
         
@@ -840,8 +925,9 @@ def handle_admins_actions(message):
             
         text = "🗑️ Список администраторов для удаления:\n\n"
         for i, admin in enumerate(admins, 1):
+            status = " (главный)" if admin['is_main_admin'] else ""
             chat_id_info = f" (chat_id: {admin['chat_id']})" if admin['chat_id'] else " (не активирован)"
-            text += f"{i}. @{admin['username']}{chat_id_info}\n"
+            text += f"{i}. @{admin['username']}{status}{chat_id_info}\n"
         text += "\nВведите username администратора для удаления (например, @username или просто username):"
         bot.send_message(chat_id, text, reply_markup=create_cancel_keyboard())
         user_states[chat_id] = 'removing_admin'
@@ -853,8 +939,8 @@ def handle_admins_actions(message):
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'adding_admin')
 def handle_adding_admin(message):
     chat_id = message.chat.id
-    if not is_admin(chat_id):
-        bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут добавлять админов.")
+    if not is_main_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Только главный администратор может добавлять админов.")
         show_main_menu(chat_id)
         return
         
@@ -869,18 +955,7 @@ def handle_adding_admin(message):
         return
         
     if add_admin(username):
-        bot.send_message(chat_id, f"✅ Администратор @{username.lstrip('@')} добавлен")
-        
-        # Отправляем сообщение новому админу (если он уже запускал бота)
-        try:
-            # Ищем chat_id по username (это приблизительный метод)
-            # В реальном приложении нужно сохранять chat_id при первом взаимодействии
-            new_admin_message = "🎉 Вас добавили в администраторы бота! Теперь вам доступны все функции управления."
-            # Здесь можно добавить логику для отправки сообщения новому админу
-            # Например, если у нас есть его chat_id в базе данных
-        except Exception as e:
-            logger.error(f"Ошибка отправки сообщения новому админу: {e}")
-            
+        bot.send_message(chat_id, f"✅ Администратор @{username.lstrip('@')} добавлен. Теперь он имеет права администратора.")
     else:
         bot.send_message(chat_id, f"❌ Ошибка при добавлении администратора @{username.lstrip('@')}. Возможно, такой администратор уже существует.")
     show_admins_menu(chat_id)
@@ -888,8 +963,8 @@ def handle_adding_admin(message):
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'removing_admin')
 def handle_removing_admin(message):
     chat_id = message.chat.id
-    if not is_admin(chat_id):
-        bot.send_message(chat_id, "❌ Недостаточно прав. Только администраторы могут удалять админов.")
+    if not is_main_admin(chat_id):
+        bot.send_message(chat_id, "❌ Недостаточно прав. Только главный администратор может удалять админов.")
         show_main_menu(chat_id)
         return
         
@@ -906,7 +981,7 @@ def handle_removing_admin(message):
     if remove_admin(username):
         bot.send_message(chat_id, f"✅ Администратор @{username.lstrip('@')} удален")
     else:
-        bot.send_message(chat_id, f"❌ Ошибка при удалении администратора @{username.lstrip('@')} или администратор не найден")
+        bot.send_message(chat_id, f"❌ Ошибка при удалении администратора @{username.lstrip('@')} или администратор не найден (главного админа нельзя удалить)")
     show_admins_menu(chat_id)
 
 # Обработчики состояний
