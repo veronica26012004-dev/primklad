@@ -1115,15 +1115,12 @@ def handle_deleting_event(message):
         
     show_events_menu(chat_id, username, text)
 
-# Состояния и выбор
 user_states = {}
 user_selections = {}
 user_item_lists = {}
 
-# Инициализация списка администраторов при запуске
 load_admins()
 
-# === KEEP-ALIVE: НЕ ДАЁТ БОТУ ЗАСНУТЬ НА RENDER ===
 def keep_alive():
     url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}"
     if not url or not url.startswith('https://'):
@@ -1141,7 +1138,6 @@ if os.environ.get('RENDER'):
     threading.Thread(target=keep_alive, daemon=True).start()
     logger.info("Keep-alive пинг запущен (каждые 5 минут)")
 
-# Webhook для Render
 from flask import Flask, request
 app = Flask(__name__)
 
@@ -1160,20 +1156,17 @@ def webhook():
         return 'Invalid content type', 403
 
 if __name__ == '__main__':
-    # Проверяем, запущено ли на Render
     if os.environ.get('RENDER'):
-        # Настройка webhook для production
         webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/webhook"
         bot.remove_webhook()
         time.sleep(1)
         bot.set_webhook(url=webhook_url)
         print(f"Webhook установлен: {webhook_url}")
         
-        # Запуск Flask приложения
         app.run(host='0.0.0.0', port=10000)
     else:
-        # Локальный запуск с polling
         print("Бот запущен в режиме polling...")
         bot.remove_webhook()
         bot.polling(none_stop=True)
+
 
