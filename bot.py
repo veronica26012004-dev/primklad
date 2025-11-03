@@ -1123,6 +1123,24 @@ user_item_lists = {}
 # Инициализация списка администраторов при запуске
 load_admins()
 
+# === KEEP-ALIVE: НЕ ДАЁТ БОТУ ЗАСНУТЬ НА RENDER ===
+def keep_alive():
+    url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}"
+    if not url or not url.startswith('https://'):
+        return
+
+    while True:
+        try:
+            response = requests.get(url, timeout=10)
+            logger.info(f"Keep-alive ping: {url} | Status: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Keep-alive error: {e}")
+        time.sleep(300)  # Каждые 5 минут
+
+if os.environ.get('RENDER'):
+    threading.Thread(target=keep_alive, daemon=True).start()
+    logger.info("Keep-alive пинг запущен (каждые 5 минут)")
+
 # Webhook для Render
 from flask import Flask, request
 app = Flask(__name__)
@@ -1158,3 +1176,4 @@ if __name__ == '__main__':
         print("Бот запущен в режиме polling...")
         bot.remove_webhook()
         bot.polling(none_stop=True)
+
