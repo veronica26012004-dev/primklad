@@ -129,50 +129,6 @@ def cleanup_old_backups(max_backups=50):
     except Exception as e:
         logger.error(f"Ошибка при очистке старых бэкапов: {e}")
 
-def get_backup_info():
-    """Получение информации о резервных копиях"""
-    try:
-        if not os.path.exists(BACKUP_DIR):
-            return "Директория бэкапов не существует"
-            
-        backups = []
-        total_size = 0
-        for filename in os.listdir(BACKUP_DIR):
-            if filename.startswith("inventory_backup_") and filename.endswith(".db"):
-                file_path = os.path.join(BACKUP_DIR, filename)
-                if os.path.isfile(file_path):
-                    size = os.path.getsize(file_path)
-                    created_time = os.path.getctime(file_path)
-                    created_date = datetime.fromtimestamp(created_time).strftime("%Y-%m-%d %H:%M:%S")
-                    backups.append({
-                        'name': filename,
-                        'size': size,
-                        'created': created_date
-                    })
-                    total_size += size
-        
-        if not backups:
-            return "Резервные копии отсутствуют"
-            
-        # Сортируем по дате создания (новые сначала)
-        backups.sort(key=lambda x: x['created'], reverse=True)
-        
-        info = f"📊 Информация о резервных копиях:\n\n"
-        info += f"Всего копий: {len(backups)}\n"
-        info += f"Общий размер: {total_size / (1024*1024):.2f} MB\n\n"
-        info += "Последние 5 копий:\n"
-        
-        for i, backup in enumerate(backups[:5], 1):
-            size_mb = backup['size'] / (1024*1024)
-            info += f"{i}. {backup['name']}\n"
-            info += f"   📅 {backup['created']} | 📦 {size_mb:.2f} MB\n\n"
-            
-        return info
-        
-    except Exception as e:
-        logger.error(f"Ошибка при получении информации о бэкапах: {e}")
-        return f"Ошибка при получении информации: {e}"
-
 # Нормализация текста
 def normalize_text(text):
     return ' '.join(text.strip().split()).lower()
@@ -281,12 +237,8 @@ def is_admin_by_username(username):
 
 def is_admin(chat_id, username=None):
     """Проверка, является ли пользователь администратором"""
-    # Если передан username, проверяем по нему
     if username:
         return is_admin_by_username(username)
-    
-    # Если нет username, пытаемся получить его из сообщения
-    # В реальном использовании username будет передаваться из обработчика сообщений
     return False
 
 def is_main_admin_by_username(username):
@@ -714,7 +666,6 @@ def create_main_menu_keyboard(chat_id, username=None):
     # Добавляем кнопку управления админами только для главного админа
     if username and is_main_admin_by_username(username):
         buttons.append(types.KeyboardButton('👑 Админы'))
-        buttons.append(types.KeyboardButton('💾 Бэкапы'))
     keyboard.add(*buttons)
     return keyboard
 
@@ -760,16 +711,6 @@ def create_admins_keyboard(chat_id):
         types.KeyboardButton('➕ Добавить админа'),
         types.KeyboardButton('➖ Удалить админа'),
         types.KeyboardButton('📋 Список админов'),
-        types.KeyboardButton('🔙 В главное меню')
-    ]
-    keyboard.add(*buttons)
-    return keyboard
-
-def create_backups_keyboard(chat_id):
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    buttons = [
-        types.KeyboardButton('📊 Информация о бэкапах'),
-        types.KeyboardButton('🔄 Создать бэкап'),
         types.KeyboardButton('🔙 В главное меню')
     ]
     keyboard.add(*buttons)
@@ -894,22 +835,6 @@ def show_admins_list(chat_id, username=None):
         
     bot.send_message(chat_id, text, reply_markup=create_admins_keyboard(chat_id))
 
-def show_backups_menu(chat_id, username=None, message_text=None):
-    """Показать меню управления бэкапами"""
-    if not username or not is_main_admin_by_username(username):
-        bot.send_message(chat_id, "❌ Недостаточно прав. Только главный администратор может управлять бэкапами.")
-        show_main_menu(chat_id, username)
-        return
-        
-    if message_text:
-        bot.send_message(chat_id, message_text, reply_markup=create_backups_keyboard(chat_id))
-    else:
-        text = "💾 Управление резервными копиями\n\nВыберите действие:"
-        bot.send_message(chat_id, text, reply_markup=create_backups_keyboard(chat_id))
-    user_states[chat_id] = 'backups_menu'
-    user_selections.pop(chat_id, None)
-    user_item_lists.pop(chat_id, None)
-
 # Обработчики сообщений
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -924,8 +849,7 @@ def start(message):
     if username and is_admin_by_username(username):
         welcome_text += "👑 Режим админа активирован\n"
         if is_main_admin_by_username(username):
-            welcome_text += "• 👑 Админы - управление администраторами\n"
-            welcome_text += "• 💾 Бэкапы - управление резервными копиями\n\n"
+            welcome_text += "• 👑 Админы - управление администраторами\n\n"
     else:
         welcome_text += "💡 Для доступа к функциям управления обратитесь к администратору"
     welcome_text += "\nВыберите нужный раздел в меню ниже 👇"
@@ -957,7 +881,7 @@ def handle_secret_word(message):
         return
         
     if add_admin(username, is_main=True):
-        bot.send_message(chat_id, "👑 Вы стали главным администратором! Теперь вам доступны все функции управления, включая управление администраторами и бэкапами.")
+        bot.send_message(chat_id, "👑 Вы стали главным администратором! Теперь вам доступны все функции управления, включая управление администраторами.")
         show_main_menu(chat_id, username)
     else:
         bot.send_message(chat_id, "❌ Ошибка при назначении главного администратора.")
@@ -981,11 +905,6 @@ def handle_events(message):
 def handle_admins(message):
     username = message.from_user.username
     show_admins_menu(message.chat.id, username)
-
-@bot.message_handler(func=lambda message: message.text == '💾 Бэкапы')
-def handle_backups(message):
-    username = message.from_user.username
-    show_backups_menu(message.chat.id, username)
 
 @bot.message_handler(func=lambda message: message.text == '🔙 Назад')
 def back_to_storage_selection(message):
@@ -1117,27 +1036,6 @@ def handle_admins_actions(message):
     elif message.text == '🔙 В главное меню':
         show_main_menu(chat_id, username)
 
-@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'backups_menu')
-def handle_backups_actions(message):
-    chat_id = message.chat.id
-    username = message.from_user.username
-    if not username or not is_main_admin_by_username(username):
-        bot.send_message(chat_id, "❌ Недостаточно прав. Только главный администратор может управлять бэкапами.")
-        show_main_menu(chat_id, username)
-        return
-        
-    if message.text == '📊 Информация о бэкапах':
-        backup_info = get_backup_info()
-        bot.send_message(chat_id, backup_info, reply_markup=create_backups_keyboard(chat_id))
-    elif message.text == '🔄 Создать бэкап':
-        backup_path = create_backup("manual")
-        if backup_path:
-            bot.send_message(chat_id, f"✅ Резервная копия создана: {os.path.basename(backup_path)}", reply_markup=create_backups_keyboard(chat_id))
-        else:
-            bot.send_message(chat_id, "❌ Ошибка при создании резервной копии", reply_markup=create_backups_keyboard(chat_id))
-    elif message.text == '🔙 В главное меню':
-        show_main_menu(chat_id, username)
-
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == 'adding_admin')
 def handle_adding_admin(message):
     chat_id = message.chat.id
@@ -1212,7 +1110,6 @@ def handle_adding_item(message):
     if added_items:
         text = f"✅ Добавлено предметов: {len(added_items)}\n\n"
         text += "\n".join(f"• {item}" for item in added_items)
-        text += f"\n\n💾 Создана резервная копия"
     else:
         text = "❌ Не удалось добавить предметы (возможно, они уже существуют)"
         
@@ -1236,7 +1133,6 @@ def handle_deleting_item(message):
     if deleted_items:
         text = f"✅ Удалено предметов: {len(deleted_items)}\n\n"
         text += "\n".join(f"• {item}" for item in deleted_items)
-        text += f"\n\n💾 Создана резервная копия"
     else:
         text = "❌ Не удалось удалить предметы (возможно, они не найдены)"
         
@@ -1273,7 +1169,7 @@ def handle_adding_event_date(message):
         
         if add_event(event_name, event_date):
             formatted_date = date_obj.strftime('%d %B %Y').replace(date_obj.strftime('%B'), MONTHS_RU[date_obj.month])
-            bot.send_message(chat_id, f"✅ Событие '{event_name}' на {formatted_date} добавлено\n\n💾 Создана резервная копия")
+            bot.send_message(chat_id, f"✅ Событие '{event_name}' на {formatted_date} добавлено")
         else:
             bot.send_message(chat_id, "❌ Ошибка при добавлении события")
             
@@ -1306,7 +1202,6 @@ def handle_deleting_event(message):
         if deleted_events:
             text = f"✅ Удалено событий: {len(deleted_events)}\n\n"
             text += "\n".join(f"• {event}" for event in deleted_events)
-            text += f"\n\n💾 Создана резервная копия"
         else:
             text = "❌ Не удалось удалить события"
     else:
