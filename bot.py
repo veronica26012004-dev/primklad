@@ -32,7 +32,6 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-# Настройки базы данных - используем текущую директорию на Render
 DB_FILE = 'inventory_bot.db'
 BACKUP_DIR = 'backups'
 
@@ -1262,3 +1261,4 @@ if __name__ == '__main__':
         print("Бот запущен в режиме polling...")
         bot.remove_webhook()
         bot.polling(none_stop=True)
+
